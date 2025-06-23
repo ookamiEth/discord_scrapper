@@ -21,6 +21,7 @@ from config import settings
 from database import ScrapingJob, ChannelSyncState, Message, ScrapingSession
 from models import JobStatus, JobType
 from token_manager import TokenManager
+from discord_client import AntiDetectionBot
 
 # Configure logging
 logging.basicConfig(
@@ -97,7 +98,12 @@ class SelfBotScraper:
         self.job_id = job_id
         self.session_id = session_id
         self.db = db_session
-        self.client = commands.Bot(command_prefix="!", self_bot=True)
+        # Use anti-detection bot instead of regular bot
+        self.client = AntiDetectionBot(
+            command_prefix="!", 
+            self_bot=True,
+            session_id=session_id
+        )
         self.messages_scraped = 0
         self.rate_limit_tracker = {}
         self.breaks_taken = 0

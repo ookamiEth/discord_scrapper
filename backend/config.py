@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     # API
     api_v1_prefix: str = "/api/v1"
     
+    # Anti-detection settings
+    enable_anti_detection: bool = True
+    anti_detection_fallback: bool = True
+    http_client_rotation_enabled: bool = True
+    http_client_rotation_interval: int = 100
+    browser_profiles: str = "chrome_win,chrome_mac,firefox_win"
+    enable_browser_automation: bool = True
+    browser_automation_timeout: int = 30
+    browser_automation_headless: bool = True
+    browser_automation_max_concurrent: int = 2
+    browser_automation_resource_limit_mb: int = 512
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

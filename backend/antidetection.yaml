@@ -1,0 +1,106 @@
+# Anti-detection Configuration
+profiles:
+  weights:  # Percentage distribution to match real-world usage
+    chrome_win: 55
+    chrome_mac: 25
+    firefox_win: 15
+    safari_mac: 5
+
+http_clients:
+  primary: curl_cffi
+  fallback_order: 
+    - tls_client
+    - browser_automation
+  
+  # Rate limits per client type
+  rate_limits:
+    curl_cffi:
+      requests_per_second: 2
+      burst: 5
+    tls_client:
+      requests_per_second: 1.5
+      burst: 4
+    browser_automation:
+      requests_per_second: 0.5
+      burst: 2
+
+browser_automation:
+  enabled: true
+  max_concurrent: 2
+  resource_limit_mb: 512
+  headless: true
+  timeout_seconds: 30
+  
+  # Challenge handling
+  auto_solve_limit: 3         # Max challenges per 30 min window
+  auto_solve_window: 1800     # 30 minutes
+  max_consecutive_failures: 5
+  
+  # Chrome options
+  chrome_version: 112
+  disable_images: true
+  disable_plugins: true
+
+session_management:
+  profile_rotation:
+    enabled: true
+    min_requests: 50
+    max_requests: 150
+    min_time_seconds: 1800    # 30 minutes
+    max_time_seconds: 3600    # 60 minutes
+  
+  # Header introduction timing (seconds after session start)
+  header_schedule:
+    - time: 0
+      headers: [Authorization, User-Agent]
+    - time: 300    # 5 minutes
+      headers: [X-Super-Properties]
+    - time: 900    # 15 minutes
+      headers: [X-Discord-Locale]
+    - time: 1800   # 30 minutes
+      headers: [X-Debug-Options]
+
+monitoring:
+  metrics_enabled: true
+  log_requests: false
+  sample_rate: 0.1  # Log 10% of requests for debugging
+  
+  # Risk thresholds
+  risk_thresholds:
+    warning: 0.5
+    critical: 0.7
+    
+  # Detection indicators to monitor
+  monitor_for:
+    - consecutive_403s
+    - rate_limit_429s
+    - challenge_frequency
+    - session_duration
+
+# Fallback configuration
+fallback:
+  enabled: true
+  max_retries: 3
+  retry_delay_base: 2  # Exponential backoff: 2^attempt seconds
+  
+  # Fallback chain
+  chain:
+    - method: curl_cffi
+      attempts: 3
+    - method: tls_client
+      attempts: 2
+    - method: browser_automation
+      attempts: 1
+    - method: standard_http
+      attempts: 1
+
+# Safety overrides
+safety:
+  # Maximum session duration before forced rotation
+  max_session_duration: 14400  # 4 hours
+  
+  # Emergency stop conditions
+  emergency_stop:
+    consecutive_challenges: 10
+    error_rate_threshold: 0.5
+    detection_score_threshold: 0.9
