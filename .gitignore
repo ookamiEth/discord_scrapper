@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+
+# Config files with sensitive data
+config.json
+
+# DiscordChatExporter
+dce/
+
+# Exports
+exports/
+*.html
+*.json
+*.csv
+*.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
