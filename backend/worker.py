@@ -1,25 +1,26 @@
 """
-Worker process for handling scraping jobs
+Self-bot worker for Discord message scraping
 """
-import os
-import sys
-import subprocess
+import asyncio
+import discord
+from discord.ext import commands
 import json
+import random
 import logging
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+import aiofiles
+from typing import Optional, List, Dict
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from rq import Worker, Queue
 from redis import Redis
 
-# Add parent directory to path to import discord_export
-sys.path.append(str(Path(__file__).parent.parent))
-
 from config import settings
-from database import ScrapingJob, ChannelSyncState, Message
+from database import ScrapingJob, ChannelSyncState, Message, ScrapingSession
 from models import JobStatus, JobType
+from token_manager import TokenManager
 
 # Configure logging
 logging.basicConfig(
@@ -28,137 +29,318 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Database setup for worker
-engine = create_engine(settings.database_url)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Anti-detection configuration
+ANTI_DETECTION_CONFIG = {
+    'min_delay': 3,
+    'max_delay': 12,
+    'burst_delay': (15, 30),  # After every 10-20 messages
+    'typing_simulation': True,
+    'active_hours': (9, 23),
+    'messages_per_hour_limit': 80,  # Reduced for safety
+    'channels_per_session': 3,  # Limit channels per session
+    'session_duration_max': 7200,  # 2 hours max
+    'break_duration': (600, 1800),  # 10-30 minute breaks
+    'api_call_variety': True  # Mix in other API calls
+}
 
+# Add jitter to delays
+def get_human_delay():
+    base = random.uniform(
+        ANTI_DETECTION_CONFIG['min_delay'],
+        ANTI_DETECTION_CONFIG['max_delay']
+    )
+    # Add gaussian noise
+    jitter = random.gauss(0, 1)
+    return max(1, base + jitter)
+
+
+class CircuitBreaker:
+    def __init__(self, failure_threshold: int = 3, timeout: int = 300):
+        self.failure_count = 0
+        self.failure_threshold = failure_threshold
+        self.timeout = timeout
+        self.last_failure_time = None
+        self.is_open = False
+    
+    async def call(self, func, *args, **kwargs):
+        if self.is_open:
+            if self.last_failure_time and (datetime.now() - self.last_failure_time).seconds > self.timeout:
+                self.is_open = False
+                self.failure_count = 0
+                logger.info("Circuit breaker reset - attempting to reconnect")
+            else:
+                raise Exception("Circuit breaker is OPEN - too many failures")
+        
+        try:
+            result = await func(*args, **kwargs)
+            self.failure_count = 0
+            return result
+        except discord.HTTPException as e:
+            self.failure_count += 1
+            self.last_failure_time = datetime.now()
+            
+            if self.failure_count >= self.failure_threshold:
+                self.is_open = True
+                logger.error(f"Circuit breaker opened after {self.failure_count} failures")
+                raise Exception(f"Circuit breaker opened after {self.failure_count} failures")
+            
+            # Exponential backoff
+            wait_time = min(300, (2 ** self.failure_count) * 5)
+            logger.warning(f"HTTP error, waiting {wait_time}s before retry (failure {self.failure_count}/{self.failure_threshold})")
+            await asyncio.sleep(wait_time)
+            raise
+
+
+class SelfBotScraper:
+    def __init__(self, user_token: str, job_id: str, session_id: str, db_session):
+        self.token = user_token
+        self.job_id = job_id
+        self.session_id = session_id
+        self.db = db_session
+        self.client = commands.Bot(command_prefix="!", self_bot=True)
+        self.messages_scraped = 0
+        self.rate_limit_tracker = {}
+        self.breaks_taken = 0
+        self.circuit_breaker = CircuitBreaker()
+        self.burst_message_count = 0
+        
+    async def setup_events(self):
+        @self.client.event
+        async def on_ready():
+            logger.info(f'Self-bot logged in as {self.client.user}')
+    
+    async def scrape_channel_messages(
+        self, 
+        channel_id: int, 
+        job_type: str,
+        export_format: str,
+        date_after: Optional[datetime] = None,
+        date_before: Optional[datetime] = None,
+        last_message_id: Optional[int] = None
+    ):
+        """Core scraping logic with anti-detection"""
+        channel = self.client.get_channel(channel_id)
+        if not channel:
+            raise Exception(f"Cannot access channel {channel_id}")
+        
+        messages_data = []
+        
+        # Configure history parameters
+        kwargs = {'limit': None}
+        if job_type == JobType.INCREMENTAL.value and last_message_id:
+            kwargs['after'] = discord.Object(id=last_message_id)
+        elif date_after:
+            kwargs['after'] = date_after
+        if date_before:
+            kwargs['before'] = date_before
+        
+        # Scrape with anti-detection measures
+        async for message in channel.history(**kwargs):
+            # Rate limiting check
+            await self._check_rate_limits()
+            
+            # Random delay between messages with human-like jitter
+            await asyncio.sleep(get_human_delay())
+            
+            # Simulate human reading behavior
+            if random.random() < 0.1:  # 10% chance of longer pause
+                await asyncio.sleep(random.uniform(5, 15))
+            
+            # Extract message data
+            msg_data = {
+                'id': str(message.id),
+                'author': {
+                    'id': str(message.author.id),
+                    'name': message.author.name,
+                    'discriminator': message.author.discriminator
+                },
+                'content': message.content,
+                'timestamp': message.created_at.isoformat(),
+                'edited_at': message.edited_at.isoformat() if message.edited_at else None,
+                'attachments': [
+                    {
+                        'url': a.url,
+                        'filename': a.filename,
+                        'size': a.size
+                    } for a in message.attachments
+                ],
+                'embeds': [e.to_dict() for e in message.embeds],
+                'reactions': [
+                    {
+                        'emoji': str(r.emoji),
+                        'count': r.count
+                    } for r in message.reactions
+                ]
+            }
+            
+            messages_data.append(msg_data)
+            self.messages_scraped += 1
+            self.burst_message_count += 1
+            
+            # Update job progress
+            if self.messages_scraped % 50 == 0:
+                await self._update_job_progress()
+            
+            # Check for burst delays
+            if self.burst_message_count >= random.randint(10, 20):
+                burst_delay = random.uniform(*ANTI_DETECTION_CONFIG['burst_delay'])
+                logger.info(f"Taking burst delay for {burst_delay:.0f} seconds...")
+                await asyncio.sleep(burst_delay)
+                self.burst_message_count = 0
+            
+            # Take random breaks
+            if (ANTI_DETECTION_CONFIG['random_breaks'] and 
+                self.messages_scraped % random.randint(200, 400) == 0):
+                break_duration = random.uniform(*ANTI_DETECTION_CONFIG['break_duration'])
+                logger.info(f"Taking break for {break_duration:.0f} seconds...")
+                self.breaks_taken += 1
+                await asyncio.sleep(break_duration)
+        
+        return messages_data
+    
+    async def _check_rate_limits(self):
+        """Implement rate limiting to avoid detection"""
+        current_hour = datetime.now().hour
+        
+        if current_hour not in self.rate_limit_tracker:
+            self.rate_limit_tracker = {current_hour: 0}
+        
+        self.rate_limit_tracker[current_hour] += 1
+        
+        if self.rate_limit_tracker[current_hour] > ANTI_DETECTION_CONFIG['messages_per_hour_limit']:
+            wait_time = 3600 - (datetime.now().minute * 60 + datetime.now().second)
+            logger.info(f"Rate limit reached, waiting {wait_time} seconds...")
+            await asyncio.sleep(wait_time)
+    
+    async def _update_job_progress(self):
+        """Update job progress in database"""
+        job = self.db.query(ScrapingJob).filter(ScrapingJob.job_id == self.job_id).first()
+        if job:
+            job.messages_scraped = self.messages_scraped
+            self.db.commit()
+        
+        # Update session stats
+        session = self.db.query(ScrapingSession).filter(
+            ScrapingSession.session_id == self.session_id
+        ).first()
+        if session:
+            session.messages_scraped = self.messages_scraped
+            session.breaks_taken = self.breaks_taken
+            self.db.commit()
 
 def scrape_channel(
     job_id: str,
     channel_id: int,
-    bot_token: str,
+    user_token: str,  # Changed from bot_token
     job_type: str,
     export_format: str,
     date_range_start: Optional[datetime] = None,
-    date_range_end: Optional[datetime] = None
+    date_range_end: Optional[datetime] = None,
+    user_id: Optional[str] = None
 ):
-    """Execute a channel scraping job"""
-    logger.info(f"Starting scraping job {job_id} for channel {channel_id}")
-    
+    """Execute self-bot scraping job"""
+    # Run async scraping in sync context
+    asyncio.run(_async_scrape_channel(
+        job_id, channel_id, user_token, job_type, 
+        export_format, date_range_start, date_range_end, user_id
+    ))
+
+async def _async_scrape_channel(job_id, channel_id, user_token, job_type, 
+                               export_format, date_range_start, date_range_end, user_id):
+    """Async implementation of channel scraping"""
+    engine = create_engine(settings.database_url)
+    SessionLocal = sessionmaker(bind=engine)
     db = SessionLocal()
+    
+    # Create session ID
+    session_id = str(uuid.uuid4())
+    
     try:
-        # Update job status to running
+        # Update job status
         job = db.query(ScrapingJob).filter(ScrapingJob.job_id == job_id).first()
-        if not job:
-            logger.error(f"Job {job_id} not found in database")
-            return
-        
         job.status = JobStatus.RUNNING.value
+        job.scraping_method = 'selfbot'
+        job.session_id = session_id
         db.commit()
         
-        # Get channel sync state for incremental scraping
-        sync_state = None
+        # Create scraping session
+        scraping_session = ScrapingSession(
+            session_id=session_id,
+            user_id=user_id or 'unknown',
+            started_at=datetime.utcnow()
+        )
+        db.add(scraping_session)
+        db.commit()
+        
+        # Initialize scraper
+        scraper = SelfBotScraper(user_token, job_id, session_id, db)
+        await scraper.setup_events()
+        
+        # Start client in background
+        asyncio.create_task(scraper.client.start(user_token, bot=False))
+        
+        # Wait for client to be ready
+        await scraper.client.wait_until_ready()
+        
+        # Get sync state for incremental
+        last_message_id = None
         if job_type == JobType.INCREMENTAL.value:
             sync_state = db.query(ChannelSyncState).filter(
                 ChannelSyncState.channel_id == channel_id
             ).first()
+            if sync_state:
+                last_message_id = sync_state.last_message_id
         
-        # Prepare discord_export.py command
-        cmd = [
-            sys.executable,
-            "../discord_export.py",
-            "-c", str(channel_id),
-            "-t", bot_token,
-            "-f", export_format,
-            "-o", settings.exports_dir
-        ]
-        
-        # Add date filters based on job type
-        if job_type == JobType.INCREMENTAL.value and sync_state and sync_state.last_message_timestamp:
-            # For incremental, start after the last synced message
-            cmd.extend(["--after", sync_state.last_message_timestamp.strftime("%Y-%m-%d")])
-        elif job_type == JobType.DATE_RANGE.value:
-            if date_range_start:
-                cmd.extend(["--after", date_range_start.strftime("%Y-%m-%d")])
-            if date_range_end:
-                cmd.extend(["--before", date_range_end.strftime("%Y-%m-%d")])
-        
-        logger.info(f"Running command: {' '.join(cmd)}")
-        
-        # Execute discord_export.py
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=str(Path(__file__).parent)
+        # Scrape messages
+        messages = await scraper.scrape_channel_messages(
+            channel_id, job_type, export_format,
+            date_range_start, date_range_end, last_message_id
         )
         
-        # Monitor progress by reading stdout
-        message_count = 0
-        for line in process.stdout:
-            logger.info(f"DCE output: {line.strip()}")
-            
-            # Try to parse progress from DCE output
-            # Look for patterns like "Exported 1000 messages"
-            if "Exported" in line and "messages" in line:
-                try:
-                    parts = line.split()
-                    idx = parts.index("Exported")
-                    if idx + 1 < len(parts):
-                        message_count = int(parts[idx + 1])
-                        # Update job progress
-                        job.messages_scraped = message_count
-                        db.commit()
-                except (ValueError, IndexError):
-                    pass
+        # Save export
+        export_path = Path(settings.exports_dir) / f"{channel_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{export_format}"
+        export_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Wait for process to complete
-        return_code = process.wait()
-        stderr_output = process.stderr.read()
+        async with aiofiles.open(export_path, 'w') as f:
+            if export_format == 'json':
+                await f.write(json.dumps(messages, indent=2))
+            # Add other format handlers as needed
         
-        if return_code == 0:
-            # Success!
-            job.status = JobStatus.COMPLETED.value
-            job.completed_at = datetime.utcnow()
-            
-            # Find the export file (most recent file in exports directory)
-            export_dir = Path(settings.exports_dir)
-            export_files = list(export_dir.glob(f"{channel_id}_*.{export_format}"))
-            if export_files:
-                latest_file = max(export_files, key=lambda f: f.stat().st_mtime)
-                job.export_path = str(latest_file)
-                
-                # Update channel sync state
-                update_sync_state(db, channel_id, job.server_id, job.channel_name, message_count)
-                
-                # Optionally parse and store messages if enabled
-                if settings.store_message_content and export_format == "json":
-                    store_messages_from_export(db, latest_file, channel_id, job.server_id)
-            
-            logger.info(f"Job {job_id} completed successfully. Scraped {message_count} messages")
-        else:
-            # Failed
-            job.status = JobStatus.FAILED.value
-            job.completed_at = datetime.utcnow()
-            job.error_message = stderr_output or "Unknown error"
-            logger.error(f"Job {job_id} failed: {job.error_message}")
+        # Update job and sync state
+        job.status = JobStatus.COMPLETED.value
+        job.completed_at = datetime.utcnow()
+        job.export_path = str(export_path)
+        job.messages_scraped = len(messages)
+        
+        # Update sync state
+        if messages:
+            update_sync_state(db, channel_id, job.server_id, 
+                            messages[-1]['id'], len(messages))
+        
+        # Close session
+        scraping_session.ended_at = datetime.utcnow()
+        scraping_session.messages_scraped = len(messages)
+        scraping_session.breaks_taken = scraper.breaks_taken
         
         db.commit()
+        logger.info(f"Job {job_id} completed successfully. Scraped {len(messages)} messages")
         
     except Exception as e:
         logger.error(f"Error in job {job_id}: {e}", exc_info=True)
-        if job:
-            job.status = JobStatus.FAILED.value
-            job.completed_at = datetime.utcnow()
-            job.error_message = str(e)
-            db.commit()
+        job.status = JobStatus.FAILED.value
+        job.error_message = str(e)
+        job.completed_at = datetime.utcnow()
+        
+        if 'scraping_session' in locals():
+            scraping_session.ended_at = datetime.utcnow()
+        
+        db.commit()
     finally:
+        await scraper.client.close()
         db.close()
 
-
-def update_sync_state(db, channel_id: int, server_id: int, channel_name: str, message_count: int):
-    """Update or create channel sync state after successful scraping"""
+def update_sync_state(db, channel_id: int, server_id: int, last_message_id: str, message_count: int):
+    """Update channel sync state after successful scraping"""
     sync_state = db.query(ChannelSyncState).filter(
         ChannelSyncState.channel_id == channel_id
     ).first()
@@ -166,59 +348,21 @@ def update_sync_state(db, channel_id: int, server_id: int, channel_name: str, me
     if not sync_state:
         sync_state = ChannelSyncState(
             channel_id=channel_id,
-            server_id=server_id,
-            channel_name=channel_name
+            server_id=server_id
         )
         db.add(sync_state)
     
     # Update sync state
+    sync_state.last_message_id = int(last_message_id)
+    sync_state.last_message_timestamp = datetime.utcnow()
     sync_state.total_messages = (sync_state.total_messages or 0) + message_count
     sync_state.last_sync_at = datetime.utcnow()
     
-    # In a real implementation, we'd parse the export to get actual message IDs/timestamps
-    # For now, just update the timestamp
-    sync_state.last_message_timestamp = datetime.utcnow()
-    
     db.commit()
-
-
-def store_messages_from_export(db, export_file: Path, channel_id: int, server_id: int):
-    """Parse and store messages from JSON export (optional feature)"""
-    try:
-        with open(export_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        # Assuming DCE JSON format has messages array
-        messages = data.get('messages', [])
-        
-        for msg_data in messages[-100:]:  # Only store last 100 messages for now
-            # Check if message already exists
-            existing = db.query(Message).filter(
-                Message.message_id == int(msg_data['id'])
-            ).first()
-            
-            if not existing:
-                message = Message(
-                    message_id=int(msg_data['id']),
-                    channel_id=channel_id,
-                    server_id=server_id,
-                    author_id=int(msg_data['author']['id']),
-                    author_name=msg_data['author']['name'],
-                    content=msg_data.get('content', ''),
-                    created_at=datetime.fromisoformat(msg_data['timestamp'].replace('Z', '+00:00'))
-                )
-                db.add(message)
-        
-        db.commit()
-        logger.info(f"Stored {len(messages)} messages from export")
-        
-    except Exception as e:
-        logger.error(f"Failed to store messages from export: {e}")
-
 
 def main():
     """Main worker entry point"""
-    logger.info("Starting Discord Scraper Worker")
+    logger.info("Starting Discord Self-Bot Scraper Worker")
     
     # Create Redis connection
     redis_conn = Redis.from_url(settings.redis_url)
@@ -230,7 +374,6 @@ def main():
     # Start worker
     logger.info("Worker ready, waiting for jobs...")
     worker.work()
-
 
 if __name__ == "__main__":
     main()

@@ -42,6 +42,8 @@ export const authAPI = {
   login: () => api.get('/auth/discord/login'),
   logout: () => api.post('/auth/logout'),
   getMe: () => api.get('/auth/me'),
+  setUserToken: (token: string) => api.post('/auth/discord/set-token', token),
+  getTokenStatus: () => api.get('/auth/discord/token-status'),
 }
 
 // Servers API

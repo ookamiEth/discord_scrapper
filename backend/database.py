@@ -1,7 +1,7 @@
 """
 Database configuration and models
 """
-from sqlalchemy import create_engine, Column, BigInteger, String, DateTime, Integer, Boolean, Text, ForeignKey
+from sqlalchemy import create_engine, Column, BigInteger, String, DateTime, Integer, Boolean, Text, ForeignKey, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import NullPool
@@ -107,3 +107,16 @@ def init_db():
 def drop_db():
     """Drop all database tables (use with caution!)"""
     Base.metadata.drop_all(bind=engine)
+
+
+class ScrapingSession(Base):
+    """Track scraping sessions for anti-detection"""
+    __tablename__ = "scraping_sessions"
+    
+    session_id = Column(String(50), primary_key=True)
+    user_id = Column(String(50), nullable=False)
+    started_at = Column(DateTime, nullable=False)
+    ended_at = Column(DateTime)
+    messages_scraped = Column(Integer, default=0)
+    breaks_taken = Column(Integer, default=0)
+    detection_score = Column(Float, default=0.0)

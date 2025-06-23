@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # Discord OAuth
     discord_client_id: Optional[str] = None
     discord_client_secret: Optional[str] = None
-    discord_redirect_uri: str = "http://localhost:8000/api/auth/discord/callback"
+    discord_redirect_uri: str = "http://localhost:8000/api/v1/auth/discord/callback"
     
     # Discord Bot
     discord_bot_token: Optional[str] = None

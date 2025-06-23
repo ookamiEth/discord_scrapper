@@ -32,6 +32,8 @@ import { RootState, AppDispatch } from '../store'
 import { fetchChannels } from '../store/serversSlice'
 import { createJob } from '../store/jobsSlice'
 import { Channel } from '../types'
+import { authAPI } from '../services/api'
+import TokenSetup from '../components/TokenSetup'
 
 export default function ServerDetail() {
   const { serverId } = useParams<{ serverId: string }>()
@@ -48,12 +50,24 @@ export default function ServerDetail() {
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [exportFormat, setExportFormat] = useState<'json' | 'html' | 'csv' | 'txt'>('json')
   const [jobType, setJobType] = useState<'full' | 'incremental'>('incremental')
+  const [tokenStatus, setTokenStatus] = useState<any>(null)
+  const [showTokenSetup, setShowTokenSetup] = useState(false)
 
   useEffect(() => {
     if (serverId) {
       dispatch(fetchChannels(serverId))
     }
+    checkTokenStatus()
   }, [dispatch, serverId])
+
+  const checkTokenStatus = async () => {
+    try {
+      const response = await authAPI.getTokenStatus()
+      setTokenStatus(response.data)
+    } catch (error) {
+      console.error('Failed to check token status')
+    }
+  }
 
   const handleChannelToggle = (channelId: number) => {
     const newSelected = new Set(selectedChannels)
@@ -121,6 +135,20 @@ export default function ServerDetail() {
           </Button>
         </Box>
       </Box>
+
+      {!tokenStatus?.has_token && (
+        <Alert 
+          severity="warning" 
+          action={
+            <Button color="inherit" size="small" onClick={() => setShowTokenSetup(true)}>
+              Setup Token
+            </Button>
+          }
+          sx={{ mb: 2 }}
+        >
+          Self-bot token required for scraping. This violates Discord ToS - use test accounts only.
+        </Alert>
+      )}
 
       <Paper>
         <Box p={2} borderBottom={1} borderColor="divider">
@@ -226,6 +254,15 @@ export default function ServerDetail() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <TokenSetup 
+        open={showTokenSetup}
+        onClose={() => setShowTokenSetup(false)}
+        onSuccess={() => {
+          checkTokenStatus()
+          setShowTokenSetup(false)
+        }}
+      />
     </Box>
   )
 }

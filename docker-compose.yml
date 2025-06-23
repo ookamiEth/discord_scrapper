@@ -33,7 +33,6 @@ services:
       dockerfile: Dockerfile.dev
     volumes:
       - ./backend:/app
-      - ./discord_export.py:/app/discord_export.py:ro
       - ./exports:/app/exports
     environment:
       DATABASE_URL: postgresql://discord_user:discord_password@postgres:5432/discord_scraper
@@ -43,6 +42,12 @@ services:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-default-dev-secret-key}
       FRONTEND_URL: http://localhost:3000
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
+      ENABLE_SELFBOT_MODE: ${ENABLE_SELFBOT_MODE:-false}
+      SELFBOT_WARNING_ACCEPTED: ${SELFBOT_WARNING_ACCEPTED:-false}
+      SELFBOT_MIN_DELAY: ${SELFBOT_MIN_DELAY:-2}
+      SELFBOT_MAX_DELAY: ${SELFBOT_MAX_DELAY:-7}
+      SELFBOT_MESSAGES_PER_HOUR: ${SELFBOT_MESSAGES_PER_HOUR:-100}
     ports:
       - "8000:8000"
     depends_on:
@@ -58,13 +63,17 @@ services:
       dockerfile: Dockerfile.dev
     volumes:
       - ./backend:/app
-      - ./discord_export.py:/app/discord_export.py:ro
       - ./exports:/app/exports
-      - ./dce:/app/dce
     environment:
       DATABASE_URL: postgresql://discord_user:discord_password@postgres:5432/discord_scraper
       REDIS_URL: redis://redis:6379
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
+      ENABLE_SELFBOT_MODE: ${ENABLE_SELFBOT_MODE:-false}
+      SELFBOT_WARNING_ACCEPTED: ${SELFBOT_WARNING_ACCEPTED:-false}
+      SELFBOT_MIN_DELAY: ${SELFBOT_MIN_DELAY:-2}
+      SELFBOT_MAX_DELAY: ${SELFBOT_MAX_DELAY:-7}
+      SELFBOT_MESSAGES_PER_HOUR: ${SELFBOT_MESSAGES_PER_HOUR:-100}
     depends_on:
       postgres:
         condition: service_healthy
