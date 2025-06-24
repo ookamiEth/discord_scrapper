@@ -4,55 +4,114 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This directory contains the Discord API documentation repository (discord-api-docs), which is the official documentation for Discord's API. Despite the directory name "discord_scrapper", there is currently no Discord scraper implementation present.
+This is a full-stack Discord scraper application with self-bot capabilities. It consists of:
+- **Backend**: FastAPI with PostgreSQL database and Redis queue
+- **Frontend**: React + TypeScript dashboard for managing scraping jobs
+- **Worker**: Background job processor for Discord scraping
+- **Self-bot**: Advanced anti-detection Discord client implementation
 
 ## Common Commands
 
-### Documentation Development
+### Docker Development
 
 ```bash
-# Install dependencies (requires Node.js >= 20.11.0)
-npm install
+# Initial setup
+cp .env.example .env  # Then edit with your keys
+./scripts/clean_start.sh
 
-# Build TypeScript files in tools directory
-npm run build
+# Quick commands
+docker-compose up -d          # Start all services
+docker-compose down           # Stop all services
+docker-compose logs -f        # View logs
+docker-compose ps            # Check service status
 
-# Lint TypeScript files
-npm run lint
-npm run lint:fix
+# Database management
+./scripts/clean_start.sh --reset-db  # Full database reset
+docker-compose exec backend alembic upgrade head  # Run migrations
+docker-compose exec backend alembic stamp head    # Mark migrations as applied
 
-# Test documentation
-npm run test:links    # Check for broken links in documentation
-npm run test:build    # Verify MDX/MD files compile correctly
-npm run test:tables   # Check markdown table formatting
+# Development
+docker-compose exec backend bash     # Backend shell
+docker-compose exec worker bash      # Worker shell
+docker-compose exec postgres psql -U discord_user -d discord_scraper  # Database shell
+```
 
-# Fix markdown table formatting
-npm run fix:tables
+### Backend Development
 
-# Generate social SDK documentation references
-npm run decorate:docs
+```bash
+# Inside backend container
+python -m pytest                     # Run tests
+python -m black .                    # Format code
+python -m flake8                     # Lint code
+alembic revision -m "description"    # Create new migration
+```
+
+### Frontend Development
+
+```bash
+# Inside frontend container or locally
+npm run dev                          # Start development server
+npm run build                        # Build production
+npm run lint                         # Lint code
+npm run type-check                   # Check TypeScript
 ```
 
 ## Repository Structure
 
-- `/discord-api-docs/docs/` - Main documentation content in MDX/Markdown format
-- `/discord-api-docs/tools/` - TypeScript utilities for documentation validation
-  - `checkBuild.ts` - Validates MDX/MD compilation
-  - `checkLinks.ts` - Validates documentation links
-- `/discord-api-docs/resources/` - Documentation assets (images, SVGs)
-- `/discord-api-docs/static/images/` - Static images for documentation
+```
+discord_scrapper/
+├── backend/                    # FastAPI backend application
+│   ├── api/                   # API endpoints
+│   ├── core/                  # Core utilities (security, config, etc.)
+│   ├── crud/                  # Database operations
+│   ├── models/                # SQLAlchemy models
+│   ├── schemas/               # Pydantic schemas
+│   ├── services/              # Business logic
+│   │   ├── discord/          # Discord integration
+│   │   │   ├── anti_detection/  # Anti-detection measures
+│   │   │   └── selfbot.py    # Self-bot implementation
+│   │   └── scraper/          # Scraping logic
+│   ├── alembic/              # Database migrations
+│   ├── main.py               # FastAPI app entry point
+│   └── worker.py             # Background job processor
+├── frontend/                  # React frontend application
+│   ├── src/
+│   │   ├── components/       # React components
+│   │   ├── pages/           # Page components
+│   │   ├── services/        # API client services
+│   │   └── store/           # Redux store
+│   └── package.json
+├── scripts/                   # Utility scripts
+│   └── clean_start.sh        # Database reset and startup script
+├── exports/                   # Export directory for scraped data
+├── docker-compose.yml         # Docker services configuration
+├── .env.example              # Environment variables template
+└── CLAUDE.md                 # This file
+```
 
 ## Important Notes
 
-1. This is a documentation-only repository for Discord's API
-2. To create an actual Discord scraper, you would need to:
-   - Create a new Python/JavaScript project
-   - Use discord.py or discord.js libraries
-   - Follow Discord's Terms of Service and rate limits
-   - Implement proper authentication using bot tokens
+### Self-Bot Mode Safety
 
-3. When modifying documentation:
-   - Follow the contribution guidelines in CONTRIBUTING.md
-   - Ensure all links are valid using `npm run test:links`
-   - Format tables properly using `npm run fix:tables`
-   - Test MDX compilation with `npm run test:build`
+1. **Terms of Service**: Self-bots violate Discord's ToS. Use at your own risk.
+2. **Rate Limiting**: The application enforces strict rate limits (80 messages/hour by default)
+3. **Anti-Detection**: Advanced measures are implemented but detection is always possible
+4. **Environment Setup**: You MUST set `SELFBOT_WARNING_ACCEPTED=true` to enable self-bot mode
+
+### Security Keys
+
+Generate secure keys for production:
+```bash
+# Generate JWT secret
+openssl rand -base64 32
+
+# Generate encryption key
+openssl rand -base64 32
+```
+
+### Common Issues
+
+1. **Database already exists**: Use `./scripts/clean_start.sh --reset-db`
+2. **Missing discord.py-self**: Install in backend container: `pip install discord.py-self`
+3. **Port conflicts**: Ensure ports 3000, 8000, 5432, 6379 are available
+4. **Memory issues**: Increase Docker memory allocation in Docker Desktop settings
