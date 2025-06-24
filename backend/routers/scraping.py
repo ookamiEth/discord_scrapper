@@ -150,15 +150,14 @@ async def list_scraping_jobs(
         }
         response = ScrapingJobResponse(**job_dict)
         
-        # Add progress calculation for running jobs
+        # Use real progress from database
         if job.status == JobStatus.RUNNING.value:
-            # Simple progress estimation based on time
-            # In real implementation, we'd parse DCE output
-            if job.started_at:
-                elapsed = (datetime.utcnow() - job.started_at).total_seconds()
-                # Estimate: 1000 messages per minute
-                estimated_progress = min(int((elapsed / 60) * 10), 95)
-                response.progress_percent = estimated_progress
+            # Use actual progress_percent from database
+            response.progress_percent = job.progress_percent or 0
+        elif job.status == JobStatus.COMPLETED.value:
+            response.progress_percent = 100
+        else:
+            response.progress_percent = 0
         
         responses.append(response)
     

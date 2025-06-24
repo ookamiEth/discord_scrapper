@@ -52,6 +52,11 @@ class ScrapingJob(Base):
     export_path = Column(Text)
     export_format = Column(String(10), default='json')
     error_message = Column(Text)
+    progress_percent = Column(Integer, default=0)  # Real progress tracking
+    
+    # Self-bot specific fields
+    scraping_method = Column(String(20), default='bot')
+    session_id = Column(String(50), nullable=True)
     
     # Date range for date-based scraping
     date_range_start = Column(DateTime)

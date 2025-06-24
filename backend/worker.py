@@ -8,6 +8,7 @@ import json
 import random
 import logging
 import uuid
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 import aiofiles
@@ -33,17 +34,17 @@ logger = logging.getLogger(__name__)
 
 # Anti-detection configuration
 ANTI_DETECTION_CONFIG = {
-    'min_delay': 3,
-    'max_delay': 12,
-    'burst_delay': (15, 30),  # After every 10-20 messages
-    'typing_simulation': True,
-    'active_hours': (9, 23),
-    'messages_per_hour_limit': 80,  # Reduced for safety
-    'channels_per_session': 3,  # Limit channels per session
+    'min_delay': float(os.environ.get('SELFBOT_MIN_DELAY', '0.1')),
+    'max_delay': float(os.environ.get('SELFBOT_MAX_DELAY', '0.2')),
+    'burst_delay': (1, 2),  # Reduced: 1-2 seconds after bursts
+    'typing_simulation': False,  # Disabled for speed
+    'active_hours': (0, 24),  # No time restrictions
+    'messages_per_hour_limit': int(os.environ.get('SELFBOT_MESSAGES_PER_HOUR', '10000')),
+    'channels_per_session': 10,  # Increased limit
     'session_duration_max': 7200,  # 2 hours max
-    'break_duration': (600, 1800),  # 10-30 minute breaks
-    'api_call_variety': True,  # Mix in other API calls
-    'random_breaks': True  # Take random breaks during scraping
+    'break_duration': (30, 60),  # Reduced: 30-60 seconds
+    'api_call_variety': False,  # Disabled for speed
+    'random_breaks': False  # Disabled for speed
 }
 
 # Add jitter to delays
@@ -235,9 +236,9 @@ class SelfBotScraper:
             self.messages_scraped += 1
             self.burst_message_count += 1
             
-            # Update job progress
-            if self.messages_scraped % 50 == 0:
-                await self._update_job_progress()
+            # Update job progress more frequently for accurate tracking
+            if self.messages_scraped % 10 == 0:  # Every 10 messages
+                await self._update_job_progress(message_limit)
             
             # Check for burst delays
             if self.burst_message_count >= random.randint(10, 20):
@@ -270,11 +271,21 @@ class SelfBotScraper:
             logger.info(f"Rate limit reached, waiting {wait_time} seconds...")
             await asyncio.sleep(wait_time)
     
-    async def _update_job_progress(self):
-        """Update job progress in database"""
+    async def _update_job_progress(self, total_messages=None):
+        """Update job progress in database with percentage"""
         job = self.db.query(ScrapingJob).filter(ScrapingJob.job_id == self.job_id).first()
         if job:
             job.messages_scraped = self.messages_scraped
+            # Calculate real progress percentage
+            if total_messages and total_messages > 0:
+                job.progress_percent = min(int((self.messages_scraped / total_messages) * 100), 99)
+            else:
+                # Better default progress calculation
+                if self.messages_scraped < 100:
+                    job.progress_percent = min(20 + (self.messages_scraped * 0.5), 70)
+                else:
+                    job.progress_percent = min(70 + ((self.messages_scraped - 100) * 0.1), 95)
+            logger.info(f"Job {self.job_id}: Progress {job.progress_percent}% ({self.messages_scraped} messages)")
             self.db.commit()
         
         # Update session stats
