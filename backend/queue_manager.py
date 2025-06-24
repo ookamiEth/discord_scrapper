@@ -36,20 +36,24 @@ def enqueue_scraping_job(
     job_type: str,
     export_format: str,
     date_range_start: Optional[datetime] = None,
-    date_range_end: Optional[datetime] = None
+    date_range_end: Optional[datetime] = None,
+    message_limit: Optional[int] = None
 ):
     """Enqueue a scraping job"""
     from worker import scrape_channel  # Import here to avoid circular imports
     
     job = queue.enqueue(
         scrape_channel,
-        job_id=job_id,
-        channel_id=channel_id,
-        bot_token=bot_token,
-        job_type=job_type,
-        export_format=export_format,
-        date_range_start=date_range_start,
-        date_range_end=date_range_end,
+        # Positional arguments in order
+        job_id,
+        channel_id,
+        bot_token,  # user_token for self-bot
+        job_type,
+        export_format,
+        date_range_start,
+        date_range_end,
+        None,  # user_id (optional)
+        message_limit,
         job_timeout='2h',  # 2 hour timeout
         result_ttl=86400,  # Keep result for 24 hours
         failure_ttl=86400  # Keep failure info for 24 hours

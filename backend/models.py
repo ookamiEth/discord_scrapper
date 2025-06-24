@@ -42,6 +42,7 @@ class CreateScrapingJobRequest(BaseModel):
     date_range_start: Optional[datetime] = Field(None, description="Start date for date range scraping")
     date_range_end: Optional[datetime] = Field(None, description="End date for date range scraping")
     bot_token: Optional[str] = Field(None, description="Bot token to use (if not using saved token)")
+    message_limit: Optional[int] = Field(None, description="Maximum number of messages to export")
 
 
 class CheckUpdatesRequest(BaseModel):

@@ -122,7 +122,8 @@ class SelfBotScraper:
         export_format: str,
         date_after: Optional[datetime] = None,
         date_before: Optional[datetime] = None,
-        last_message_id: Optional[int] = None
+        last_message_id: Optional[int] = None,
+        message_limit: Optional[int] = None
     ):
         """Core scraping logic with anti-detection"""
         channel = self.client.get_channel(channel_id)
@@ -139,6 +140,10 @@ class SelfBotScraper:
             kwargs['after'] = date_after
         if date_before:
             kwargs['before'] = date_before
+        
+        # If message_limit is specified, use it
+        if message_limit:
+            kwargs['limit'] = message_limit
         
         # Scrape with anti-detection measures
         async for message in channel.history(**kwargs):
@@ -242,17 +247,18 @@ def scrape_channel(
     export_format: str,
     date_range_start: Optional[datetime] = None,
     date_range_end: Optional[datetime] = None,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    message_limit: Optional[int] = None
 ):
     """Execute self-bot scraping job"""
     # Run async scraping in sync context
     asyncio.run(_async_scrape_channel(
         job_id, channel_id, user_token, job_type, 
-        export_format, date_range_start, date_range_end, user_id
+        export_format, date_range_start, date_range_end, user_id, message_limit
     ))
 
 async def _async_scrape_channel(job_id, channel_id, user_token, job_type, 
-                               export_format, date_range_start, date_range_end, user_id):
+                               export_format, date_range_start, date_range_end, user_id, message_limit):
     """Async implementation of channel scraping"""
     engine = create_engine(settings.database_url)
     SessionLocal = sessionmaker(bind=engine)
@@ -300,7 +306,7 @@ async def _async_scrape_channel(job_id, channel_id, user_token, job_type,
         # Scrape messages
         messages = await scraper.scrape_channel_messages(
             channel_id, job_type, export_format,
-            date_range_start, date_range_end, last_message_id
+            date_range_start, date_range_end, last_message_id, message_limit
         )
         
         # Save export

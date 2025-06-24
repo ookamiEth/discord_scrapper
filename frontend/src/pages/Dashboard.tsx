@@ -12,12 +12,20 @@ import {
   Alert,
   TextField,
   InputAdornment,
+  Button,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Chip,
 } from '@mui/material'
-import { Search as SearchIcon } from '@mui/icons-material'
+import { Search as SearchIcon, Add as AddIcon, CheckCircle as CheckCircleIcon, Warning as WarningIcon } from '@mui/icons-material'
 import { RootState, AppDispatch } from '../store'
 import { fetchServers } from '../store/serversSlice'
-import { scrapingAPI } from '../services/api'
+import { scrapingAPI, authAPI } from '../services/api'
 import { Stats } from '../types'
+import AddServerDialog from '../components/AddServerDialog'
+import TokenSetup from '../components/TokenSetup'
 
 export default function Dashboard() {
   const navigate = useNavigate()
@@ -25,11 +33,24 @@ export default function Dashboard() {
   const { servers, loading, error } = useSelector((state: RootState) => state.servers)
   const [stats, setStats] = useState<Stats | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
+  const [addServerOpen, setAddServerOpen] = useState(false)
+  const [tokenSetupOpen, setTokenSetupOpen] = useState(false)
+  const [tokenStatus, setTokenStatus] = useState<{ has_token: boolean } | null>(null)
 
   useEffect(() => {
     dispatch(fetchServers())
     fetchStats()
+    checkTokenStatus()
   }, [dispatch])
+
+  const checkTokenStatus = async () => {
+    try {
+      const response = await authAPI.getTokenStatus()
+      setTokenStatus(response.data)
+    } catch (error) {
+      console.error('Failed to check token status')
+    }
+  }
 
   const fetchStats = async () => {
     try {
@@ -58,9 +79,42 @@ export default function Dashboard() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
-        Dashboard
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+        <Typography variant="h4">
+          Dashboard
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+          {tokenStatus && (
+            <Chip
+              icon={tokenStatus.has_token ? <CheckCircleIcon /> : <WarningIcon />}
+              label={tokenStatus.has_token ? "Discord Token Configured" : "No Discord Token"}
+              color={tokenStatus.has_token ? "success" : "warning"}
+              variant={tokenStatus.has_token ? "filled" : "outlined"}
+            />
+          )}
+          <Button
+            variant={tokenStatus?.has_token ? "outlined" : "contained"}
+            onClick={() => setTokenSetupOpen(true)}
+            color={tokenStatus?.has_token ? "primary" : "warning"}
+          >
+            {tokenStatus?.has_token ? "Update Token" : "Setup Discord Token"}
+          </Button>
+        </Box>
+      </Box>
+      
+      {tokenStatus && !tokenStatus.has_token && (
+        <Alert 
+          severity="warning" 
+          sx={{ mb: 3 }}
+          action={
+            <Button color="inherit" size="small" onClick={() => setTokenSetupOpen(true)}>
+              Setup Now
+            </Button>
+          }
+        >
+          Discord token required for scraping. Self-bot usage violates Discord ToS - use test accounts only.
+        </Alert>
+      )}
       
       {stats && (
         <Grid container spacing={3} sx={{ mb: 4 }}>
@@ -126,9 +180,18 @@ export default function Dashboard() {
         />
       </Box>
 
-      <Typography variant="h5" gutterBottom sx={{ mt: 4 }}>
-        Your Servers
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 4, mb: 2 }}>
+        <Typography variant="h5">
+          Your Servers
+        </Typography>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => setAddServerOpen(true)}
+        >
+          Add Server Manually
+        </Button>
+      </Box>
       
       <Grid container spacing={3}>
         {filteredServers.map((server) => (
@@ -167,10 +230,28 @@ export default function Dashboard() {
       {filteredServers.length === 0 && (
         <Box textAlign="center" py={4}>
           <Typography variant="body1" color="text.secondary">
-            {searchTerm ? 'No servers found matching your search.' : 'No servers found. Make sure your bot is added to at least one server.'}
+            {searchTerm ? 'No servers found matching your search.' : 'No servers found. Click "Add Server Manually" to get started.'}
           </Typography>
         </Box>
       )}
+
+      <AddServerDialog
+        open={addServerOpen}
+        onClose={() => setAddServerOpen(false)}
+        onSuccess={() => {
+          setAddServerOpen(false)
+          dispatch(fetchServers())
+        }}
+      />
+
+      <TokenSetup
+        open={tokenSetupOpen}
+        onClose={() => setTokenSetupOpen(false)}
+        onSuccess={() => {
+          setTokenSetupOpen(false)
+          checkTokenStatus() // Refresh token status
+        }}
+      />
     </Box>
   )
 }

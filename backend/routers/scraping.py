@@ -10,6 +10,7 @@ import uuid
 from rq import Queue
 from redis import Redis
 import logging
+import os
 
 from config import settings
 from database import get_db, ScrapingJob, ChannelSyncState
@@ -37,12 +38,18 @@ async def create_scraping_job(
     # Generate job ID
     job_id = str(uuid.uuid4())
     
-    # Get bot token (from request or stored)
-    bot_token = request.bot_token or settings.discord_bot_token
-    if not bot_token:
+    # Get user token for self-bot mode
+    user_token = os.environ.get("DISCORD_USER_TOKEN")
+    if not user_token:
+        # Try to get from stored tokens
+        from routers.auth import user_discord_tokens
+        user_id = current_user.get("user_id", "local-user")
+        user_token = user_discord_tokens.get(user_id)
+    
+    if not user_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Bot token is required"
+            detail="Discord user token is required. Please set up your token first."
         )
     
     # Create job record
@@ -67,11 +74,12 @@ async def create_scraping_job(
             queue=queue,
             job_id=job_id,
             channel_id=request.channel_id,
-            bot_token=bot_token,
+            bot_token=user_token,  # Actually user_token for self-bot
             job_type=request.job_type.value,
             export_format=request.export_format.value,
             date_range_start=request.date_range_start,
-            date_range_end=request.date_range_end
+            date_range_end=request.date_range_end,
+            message_limit=request.message_limit
         )
     except Exception as e:
         logger.error(f"Failed to enqueue job {job_id}: {e}")

@@ -22,6 +22,10 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  RadioGroup,
+  FormControlLabel,
+  Radio,
+  TextField,
 } from '@mui/material'
 import {
   Refresh as RefreshIcon,
@@ -52,6 +56,9 @@ export default function ServerDetail() {
   const [jobType, setJobType] = useState<'full' | 'incremental'>('incremental')
   const [tokenStatus, setTokenStatus] = useState<any>(null)
   const [showTokenSetup, setShowTokenSetup] = useState(false)
+  const [exportMode, setExportMode] = useState<'all' | 'last_messages' | 'last_days'>('all')
+  const [lastMessagesCount, setLastMessagesCount] = useState<number>(100)
+  const [lastDaysCount, setLastDaysCount] = useState<number>(7)
 
   useEffect(() => {
     if (serverId) {
@@ -90,12 +97,27 @@ export default function ServerDetail() {
   const handleExport = async () => {
     for (const channelId of selectedChannels) {
       const channel = channels.find(c => c.channel_id === channelId)
+      
+      // Calculate date range for last X days
+      let dateRangeStart = undefined
+      let messageLimit = undefined
+      
+      if (jobType === 'full' && exportMode === 'last_days') {
+        const startDate = new Date()
+        startDate.setDate(startDate.getDate() - lastDaysCount)
+        dateRangeStart = startDate.toISOString()
+      } else if (jobType === 'full' && exportMode === 'last_messages') {
+        messageLimit = lastMessagesCount
+      }
+      
       await dispatch(createJob({
         server_id: parseInt(serverId!),
         channel_id: channelId,
         channel_name: channel?.name,
         job_type: jobType,
         export_format: exportFormat,
+        date_range_start: dateRangeStart,
+        message_limit: messageLimit,
       }))
     }
     setExportDialogOpen(false)
@@ -216,7 +238,7 @@ export default function ServerDetail() {
         </Alert>
       )}
 
-      <Dialog open={exportDialogOpen} onClose={() => setExportDialogOpen(false)}>
+      <Dialog open={exportDialogOpen} onClose={() => setExportDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Export Channels</DialogTitle>
         <DialogContent>
           <Box sx={{ minWidth: 400, pt: 2 }}>
@@ -228,9 +250,71 @@ export default function ServerDetail() {
                 onChange={(e) => setJobType(e.target.value as 'full' | 'incremental')}
               >
                 <MenuItem value="incremental">Incremental (New messages only)</MenuItem>
-                <MenuItem value="full">Full Export (All messages)</MenuItem>
+                <MenuItem value="full">Full Export</MenuItem>
               </Select>
             </FormControl>
+
+            {jobType === 'full' && (
+              <Box sx={{ mb: 3 }}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  Full Export Options:
+                </Typography>
+                <RadioGroup
+                  value={exportMode}
+                  onChange={(e) => setExportMode(e.target.value as any)}
+                >
+                  <FormControlLabel
+                    value="all"
+                    control={<Radio />}
+                    label="Export all messages"
+                  />
+                  <FormControlLabel
+                    value="last_messages"
+                    control={<Radio />}
+                    label={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <span>Export last</span>
+                        <TextField
+                          size="small"
+                          type="number"
+                          value={lastMessagesCount}
+                          onChange={(e) => setLastMessagesCount(parseInt(e.target.value) || 100)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExportMode('last_messages');
+                          }}
+                          sx={{ width: 80 }}
+                          inputProps={{ min: 1 }}
+                        />
+                        <span>messages</span>
+                      </Box>
+                    }
+                  />
+                  <FormControlLabel
+                    value="last_days"
+                    control={<Radio />}
+                    label={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <span>Export messages from last</span>
+                        <TextField
+                          size="small"
+                          type="number"
+                          value={lastDaysCount}
+                          onChange={(e) => setLastDaysCount(parseInt(e.target.value) || 7)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExportMode('last_days');
+                          }}
+                          sx={{ width: 80 }}
+                          inputProps={{ min: 1 }}
+                        />
+                        <span>days</span>
+                      </Box>
+                    }
+                  />
+                </RadioGroup>
+              </Box>
+            )}
             
             <FormControl fullWidth>
               <InputLabel>Export Format</InputLabel>

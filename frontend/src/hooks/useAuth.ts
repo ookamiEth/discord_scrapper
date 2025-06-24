@@ -20,13 +20,18 @@ export const useAuth = () => {
 
       try {
         const response = await authAPI.getMe()
+        console.log('Auth check response:', response.data)
         if (response.data) {
           dispatch(setAuth({ user: response.data, token: storedToken }))
         } else {
+          console.log('No user data in response')
           dispatch(clearAuth())
         }
       } catch (error) {
+        console.error('Auth check failed:', error)
         dispatch(clearAuth())
+      } finally {
+        dispatch(setLoading(false))
       }
     }
 

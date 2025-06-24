@@ -9,11 +9,14 @@ export default function Login() {
   const dispatch = useDispatch()
 
   const handleLocalLogin = async () => {
+    console.log('Login button clicked!')
     try {
       const response = await api.post('/auth/local-login')
+      console.log('Login response:', response.data)
       const { access_token, user } = response.data
       
       localStorage.setItem('token', access_token)
+      console.log('Token stored:', access_token)
       dispatch(setAuth({ user, token: access_token }))
       navigate('/')
     } catch (error) {

@@ -16,10 +16,106 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Add this model for manual server addition
+from pydantic import BaseModel
+import json
+import os
+
+# Store manually added servers persistently
+SERVERS_FILE = "/tmp/discord_scraper_servers.json"
+
+def load_servers():
+    """Load servers from persistent storage"""
+    if os.path.exists(SERVERS_FILE):
+        try:
+            with open(SERVERS_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_servers(servers):
+    """Save servers to persistent storage"""
+    with open(SERVERS_FILE, 'w') as f:
+        json.dump(servers, f)
+
+class ManualServerRequest(BaseModel):
+    server_id: str
+    server_name: str
+    channel_id: str
+    channel_name: str
+    is_verified: bool = False
+
+
+@router.post("/manual")
+async def add_server_manually(
+    request: ManualServerRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Manually add a server and channel for scraping (self-bot mode)"""
+    if current_user.get("user_id") != "local-user":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Manual server addition is only available in self-bot mode"
+        )
+    
+    # Store the server info in the database
+    # For now, we'll store it in session/memory since we don't have a proper server table
+    # In production, you'd want to create a proper database table for manually added servers
+    
+    # Create a mock server response - store IDs as strings to avoid JS precision issues
+    server = {
+        "server_id": request.server_id,  # Keep as string
+        "name": request.server_name,
+        "icon_url": None,
+        "is_admin": True,  # Assume we have access
+        "member_count": 0,
+        "is_verified": request.is_verified,
+        "channel_id": request.channel_id,  # Keep as string
+        "channel_name": request.channel_name
+    }
+    
+    # Load existing servers
+    servers = load_servers()
+    
+    # Check if server already exists
+    existing = next((s for s in servers if s['server_id'] == server['server_id']), None)
+    if existing:
+        # Update existing server
+        existing.update(server)
+    else:
+        # Add new server
+        servers.append(server)
+    
+    # Save to persistent storage
+    save_servers(servers)
+    
+    return {"status": "success", "message": "Server added successfully", "server": server}
+
 
 @router.get("/", response_model=List[ServerResponse])
 async def get_user_servers(current_user: dict = Depends(get_current_user)):
     """Get list of Discord servers the user is in"""
+    # In local mode, return manually added servers
+    if current_user.get("user_id") == "local-user":
+        # Return manually added servers from persistent storage
+        servers = load_servers()
+        # Return server IDs as integers but they'll be serialized properly
+        result = []
+        for s in servers:
+            # Parse server_id to int, handling both string and int inputs
+            server_id = int(s['server_id']) if isinstance(s['server_id'], str) else s['server_id']
+            result.append(ServerResponse(
+                server_id=server_id,
+                name=s['name'],
+                icon_url=s['icon_url'],
+                is_admin=s['is_admin'],
+                member_count=s['member_count']
+            ))
+        logger.info(f"Returning servers: {[s.server_id for s in result]}")
+        return result
+    
     discord_token = current_user.get("discord_access_token")
     if not discord_token:
         raise HTTPException(
@@ -68,8 +164,40 @@ async def get_server_channels(
     db: Session = Depends(get_db)
 ):
     """Get list of channels in a Discord server"""
-    # For now, we'll need the user to have their bot in the server
-    # In a real implementation, we'd use the bot token to fetch channels
+    # In local mode, return the manually added channel for this server
+    if current_user.get("user_id") == "local-user":
+        logger.info(f"Getting channels for server {server_id} in local mode")
+        servers = load_servers()
+        
+        # Find server by comparing the first 17 digits (to handle JS precision issues)
+        server = None
+        server_id_str = str(server_id)
+        for s in servers:
+            stored_id_str = str(s['server_id'])
+            # Compare first 17 digits or exact match
+            if stored_id_str == server_id_str or stored_id_str[:17] == server_id_str[:17]:
+                server = s
+                logger.info(f"Found matching server: {s['name']} (stored: {stored_id_str}, requested: {server_id_str})")
+                break
+        
+        if not server:
+            logger.warning(f"No server found for ID {server_id}. Available servers: {[str(s['server_id']) for s in servers]}")
+        
+        if server:
+                return [
+                    ChannelResponse(
+                        channel_id=int(server['channel_id']) if isinstance(server['channel_id'], str) else server['channel_id'],
+                        server_id=server_id,
+                        name=server['channel_name'],
+                        type="text",  # Text channel
+                        position=0,
+                        category_id=None,
+                        topic=None,
+                        is_nsfw=False,
+                        last_sync=None
+                    )
+                ]
+        return []
     
     if not settings.discord_bot_token:
         raise HTTPException(

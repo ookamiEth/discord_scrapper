@@ -12,7 +12,7 @@ import logging
 from config import settings
 from database import get_db, init_db
 from auth import get_current_user_optional
-from routers import auth, scraping, servers
+from routers import auth, scraping, servers, system
 import models
 
 # Configure logging
@@ -40,6 +40,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix=f"{settings.api_v1_prefix}/auth", tags=["auth"])
 app.include_router(servers.router, prefix=f"{settings.api_v1_prefix}/servers", tags=["servers"])
 app.include_router(scraping.router, prefix=f"{settings.api_v1_prefix}/scraping", tags=["scraping"])
+app.include_router(system.router, prefix=f"{settings.api_v1_prefix}/system", tags=["system"])
 
 
 @app.on_event("startup")

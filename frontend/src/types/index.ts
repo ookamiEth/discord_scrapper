@@ -54,6 +54,7 @@ export interface CreateJobRequest {
   date_range_start?: string
   date_range_end?: string
   bot_token?: string
+  message_limit?: number
 }
 
 export interface Stats {

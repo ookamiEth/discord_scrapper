@@ -34,6 +34,7 @@ services:
     volumes:
       - ./backend:/app
       - ./exports:/app/exports
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       DATABASE_URL: postgresql://discord_user:discord_password@postgres:5432/discord_scraper
       REDIS_URL: redis://redis:6379

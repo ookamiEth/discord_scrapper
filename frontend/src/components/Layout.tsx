@@ -21,8 +21,10 @@ import {
   Dashboard as DashboardIcon,
   Work as JobsIcon,
   Logout as LogoutIcon,
+  PowerSettingsNew as PowerIcon,
 } from '@mui/icons-material'
 import { useAuth } from '../hooks/useAuth'
+import { systemService } from '../services/system'
 
 const drawerWidth = 240
 
@@ -47,6 +49,26 @@ export default function Layout() {
   const handleLogout = async () => {
     await logout()
     navigate('/login')
+  }
+
+  const handleShutdown = async () => {
+    handleProfileMenuClose()
+    
+    if (window.confirm('This will shut down all services. You\'ll need to run ./start.sh to use the app again. Continue?')) {
+      try {
+        const response = await systemService.shutdown()
+        // Show success message
+        window.alert('Shutdown initiated! All services will stop in a few seconds.\n\nTo start again, run: ./start.sh')
+        
+        // Services will be shutting down, so just show a message
+        setTimeout(() => {
+          document.body.innerHTML = '<div style="display: flex; justify-content: center; align-items: center; height: 100vh; font-family: Arial, sans-serif;"><div style="text-align: center;"><h1>Services Stopped</h1><p>Run <code>./start.sh</code> to restart the application.</p></div></div>'
+        }, 3000)
+      } catch (error) {
+        console.error('Shutdown failed:', error)
+        window.alert('Failed to shutdown services. Please use docker-compose down manually.')
+      }
+    }
   }
 
   const menuItems = [
@@ -114,6 +136,12 @@ export default function Layout() {
                 <LogoutIcon fontSize="small" />
               </ListItemIcon>
               Logout
+            </MenuItem>
+            <MenuItem onClick={handleShutdown} sx={{ color: 'error.main' }}>
+              <ListItemIcon>
+                <PowerIcon fontSize="small" sx={{ color: 'error.main' }} />
+              </ListItemIcon>
+              Shutdown App
             </MenuItem>
           </Menu>
         </Toolbar>

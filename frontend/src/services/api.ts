@@ -29,7 +29,9 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    console.log('API Error:', error.response?.status, error.response?.data)
     if (error.response?.status === 401) {
+      console.log('401 Unauthorized - Clearing auth and redirecting to login')
       store.dispatch(clearAuth())
       window.location.href = '/login'
     }
@@ -42,7 +44,7 @@ export const authAPI = {
   login: () => api.get('/auth/discord/login'),
   logout: () => api.post('/auth/logout'),
   getMe: () => api.get('/auth/me'),
-  setUserToken: (token: string) => api.post('/auth/discord/set-token', token),
+  setUserToken: (token: string) => api.post('/auth/discord/set-token', { token }),
   getTokenStatus: () => api.get('/auth/discord/token-status'),
 }
 
