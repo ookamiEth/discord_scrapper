@@ -5,7 +5,6 @@ import Dashboard from './pages/Dashboard'
 import ServerDetail from './pages/ServerDetail'
 import Jobs from './pages/Jobs'
 import Login from './pages/Login'
-import AuthCallback from './pages/AuthCallback'
 import { useAuth } from './hooks/useAuth'
 
 function App() {
@@ -27,7 +26,6 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route path="/auth/callback" element={<AuthCallback />} />
       
       {isAuthenticated ? (
         <Route path="/" element={<Layout />}>

@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = '002'
-down_revision = '001_initial_schema'
+down_revision = '001'
 
 def upgrade():
     # Create user_tokens table

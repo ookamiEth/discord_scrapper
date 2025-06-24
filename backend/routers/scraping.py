@@ -3,6 +3,7 @@ Scraping job management routes
 """
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List, Optional
 from datetime import datetime
 import uuid
@@ -238,7 +239,7 @@ async def get_dashboard_stats(
     
     # Count total messages (sum from all jobs)
     total_messages = db.query(
-        db.func.sum(ScrapingJob.messages_scraped)
+        func.sum(ScrapingJob.messages_scraped)
     ).scalar() or 0
     
     # Count jobs
