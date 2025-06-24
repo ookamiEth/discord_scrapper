@@ -101,11 +101,11 @@ async def get_user_servers(current_user: dict = Depends(get_current_user)):
     if current_user.get("user_id") == "local-user":
         # Return manually added servers from persistent storage
         servers = load_servers()
-        # Return server IDs as integers but they'll be serialized properly
+        # Return servers with string IDs
         result = []
         for s in servers:
-            # Parse server_id to int, handling both string and int inputs
-            server_id = int(s['server_id']) if isinstance(s['server_id'], str) else s['server_id']
+            # Keep server_id as string
+            server_id = str(s['server_id'])
             result.append(ServerResponse(
                 server_id=server_id,
                 name=s['name'],
@@ -148,7 +148,7 @@ async def get_user_servers(current_user: dict = Depends(get_current_user)):
         is_admin = (permissions & 0x8) == 0x8  # Administrator permission
         
         servers.append(ServerResponse(
-            server_id=int(guild["id"]),
+            server_id=guild["id"],  # Keep as string
             name=guild["name"],
             icon_url=f"https://cdn.discordapp.com/icons/{guild['id']}/{guild['icon']}.png" if guild.get("icon") else None,
             member_count=None  # Not available from this endpoint
@@ -159,7 +159,7 @@ async def get_user_servers(current_user: dict = Depends(get_current_user)):
 
 @router.get("/{server_id}/channels", response_model=List[ChannelResponse])
 async def get_server_channels(
-    server_id: int,
+    server_id: str,  # Changed to string
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -186,8 +186,8 @@ async def get_server_channels(
         if server:
                 return [
                     ChannelResponse(
-                        channel_id=int(server['channel_id']) if isinstance(server['channel_id'], str) else server['channel_id'],
-                        server_id=server_id,
+                        channel_id=str(server['channel_id']),  # Keep as string
+                        server_id=server_id,  # Already a string
                         name=server['channel_name'],
                         type="text",  # Text channel
                         position=0,
@@ -229,11 +229,12 @@ async def get_server_channels(
         channels_data = response.json()
     
     # Get sync state for all channels
-    channel_ids = [int(ch["id"]) for ch in channels_data if ch["type"] in [0, 5]]  # Text channels only
+    channel_ids = [ch["id"] for ch in channels_data if ch["type"] in [0, 5]]  # Keep as strings
+    # Note: This sync state query might need adjustment if database still uses integer IDs
     sync_states = db.query(ChannelSyncState).filter(
-        ChannelSyncState.channel_id.in_(channel_ids)
+        ChannelSyncState.channel_id.in_([int(cid) for cid in channel_ids])  # Convert for DB query if needed
     ).all()
-    sync_map = {state.channel_id: state for state in sync_states}
+    sync_map = {str(state.channel_id): state for state in sync_states}  # Map with string keys
     
     # Convert to response model
     channels = []
@@ -242,15 +243,15 @@ async def get_server_channels(
         if channel["type"] not in [0, 5]:
             continue
         
-        channel_id = int(channel["id"])
+        channel_id = channel["id"]  # Keep as string
         sync_state = sync_map.get(channel_id)
         
         channels.append(ChannelResponse(
-            channel_id=channel_id,
-            server_id=server_id,
+            channel_id=channel_id,  # String
+            server_id=server_id,    # String
             name=channel["name"],
             type="text" if channel["type"] == 0 else "news",
-            category_id=int(channel["parent_id"]) if channel.get("parent_id") else None,
+            category_id=channel.get("parent_id"),  # Keep as string if present
             position=channel["position"],
             topic=channel.get("topic"),
             is_nsfw=channel.get("nsfw", False),
@@ -265,7 +266,7 @@ async def get_server_channels(
 
 @router.post("/{server_id}/refresh")
 async def refresh_server_data(
-    server_id: int,
+    server_id: str,  # Changed to string
     current_user: dict = Depends(get_current_user)
 ):
     """Refresh server data (placeholder for future enhancement)"""

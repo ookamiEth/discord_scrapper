@@ -31,7 +31,7 @@ def get_redis_queue(queue_name: str = "default") -> Queue:
 def enqueue_scraping_job(
     queue: Queue,
     job_id: str,
-    channel_id: int,
+    channel_id: str,  # Changed to string
     bot_token: str,
     job_type: str,
     export_format: str,

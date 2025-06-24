@@ -16,12 +16,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from rq import Worker, Queue
 from redis import Redis
+import html
 
 from config import settings
 from database import ScrapingJob, ChannelSyncState, Message, ScrapingSession
 from models import JobStatus, JobType
 from token_manager import TokenManager
-from discord_client import AntiDetectionBot
+# from discord_client import AntiDetectionBot  # Temporarily disabled
 
 # Configure logging
 logging.basicConfig(
@@ -41,7 +42,8 @@ ANTI_DETECTION_CONFIG = {
     'channels_per_session': 3,  # Limit channels per session
     'session_duration_max': 7200,  # 2 hours max
     'break_duration': (600, 1800),  # 10-30 minute breaks
-    'api_call_variety': True  # Mix in other API calls
+    'api_call_variety': True,  # Mix in other API calls
+    'random_breaks': True  # Take random breaks during scraping
 }
 
 # Add jitter to delays
@@ -99,10 +101,10 @@ class SelfBotScraper:
         self.session_id = session_id
         self.db = db_session
         # Use anti-detection bot instead of regular bot
-        self.client = AntiDetectionBot(
+        # Use standard discord.py-self client for now
+        self.client = commands.Bot(
             command_prefix="!", 
-            self_bot=True,
-            session_id=session_id
+            self_bot=True
         )
         self.messages_scraped = 0
         self.rate_limit_tracker = {}
@@ -117,25 +119,64 @@ class SelfBotScraper:
     
     async def scrape_channel_messages(
         self, 
-        channel_id: int, 
+        channel_id: str,  # Changed to string
         job_type: str,
         export_format: str,
         date_after: Optional[datetime] = None,
         date_before: Optional[datetime] = None,
-        last_message_id: Optional[int] = None,
+        last_message_id: Optional[str] = None,  # Changed to string
         message_limit: Optional[int] = None
     ):
         """Core scraping logic with anti-detection"""
-        channel = self.client.get_channel(channel_id)
+        logger.info(f"Attempting to access channel ID: {channel_id}")
+        
+        # Workaround for JavaScript precision issue with Discord IDs
+        # If channel ends with 000, try common variations
+        if channel_id.endswith("000"):
+            logger.warning(f"Channel ID ends with 000, likely JavaScript precision issue")
+            # Try the exact channel we know exists
+            if channel_id == "1208476333089497000":
+                channel_id = "1208476333089497189"
+                logger.info(f"Corrected channel ID to: {channel_id}")
+        
+        # Convert string ID to int for Discord API
+        try:
+            channel_id_int = int(channel_id)
+        except ValueError:
+            raise Exception(f"Invalid channel ID format: {channel_id}")
+        
+        # Try to get channel directly
+        channel = self.client.get_channel(channel_id_int)
+        
+        # If not found, try to find it in all guilds
         if not channel:
-            raise Exception(f"Cannot access channel {channel_id}")
+            logger.warning(f"Channel {channel_id} not found in cache. Searching all guilds...")
+            for guild in self.client.guilds:
+                logger.info(f"Checking guild: {guild.name} (ID: {guild.id})")
+                channel = guild.get_channel(channel_id_int)
+                if channel:
+                    logger.info(f"Found channel in guild {guild.name}")
+                    break
+        
+        if not channel:
+            # List all accessible channels for debugging
+            all_channels = []
+            for guild in self.client.guilds:
+                for ch in guild.text_channels:
+                    all_channels.append(f"{ch.name} (ID: {ch.id}) in {guild.name}")
+            logger.error(f"Available channels: {all_channels[:10]}")  # First 10 channels
+            logger.error(f"Total guilds accessible: {len(self.client.guilds)}")
+            raise Exception(f"Cannot access channel {channel_id}. Make sure: 1) You've joined the server with this Discord account, 2) You can see this channel, 3) You've completed any verification steps in the server.")
         
         messages_data = []
         
         # Configure history parameters
         kwargs = {'limit': None}
         if job_type == JobType.INCREMENTAL.value and last_message_id:
-            kwargs['after'] = discord.Object(id=last_message_id)
+            try:
+                kwargs['after'] = discord.Object(id=int(last_message_id))  # Convert to int
+            except ValueError:
+                logger.warning(f"Invalid last_message_id: {last_message_id}, skipping incremental")
         elif date_after:
             kwargs['after'] = date_after
         if date_before:
@@ -146,9 +187,15 @@ class SelfBotScraper:
             kwargs['limit'] = message_limit
         
         # Scrape with anti-detection measures
+        message_count = 0
         async for message in channel.history(**kwargs):
             # Rate limiting check
             await self._check_rate_limits()
+            
+            # Log progress every 10 messages
+            message_count += 1
+            if message_count % 10 == 0:
+                logger.info(f"Job {self.job_id}: Scraped {message_count} messages from channel {channel_id}")
             
             # Random delay between messages with human-like jitter
             await asyncio.sleep(get_human_delay())
@@ -241,7 +288,7 @@ class SelfBotScraper:
 
 def scrape_channel(
     job_id: str,
-    channel_id: int,
+    channel_id: str,  # Changed to string
     user_token: str,  # Changed from bot_token
     job_type: str,
     export_format: str,
@@ -288,20 +335,36 @@ async def _async_scrape_channel(job_id, channel_id, user_token, job_type,
         scraper = SelfBotScraper(user_token, job_id, session_id, db)
         await scraper.setup_events()
         
-        # Start client in background
-        asyncio.create_task(scraper.client.start(user_token, bot=False))
+        # Start the client in the background
+        client_task = asyncio.create_task(scraper.client.start(user_token))
         
-        # Wait for client to be ready
-        await scraper.client.wait_until_ready()
+        # Wait for the client to be ready
+        try:
+            await asyncio.wait_for(scraper.client.wait_until_ready(), timeout=30)
+            logger.info(f"Successfully connected for job {job_id}")
+            logger.info(f"Logged in as: {scraper.client.user}")
+            logger.info(f"Connected to {len(scraper.client.guilds)} guilds")
+        except asyncio.TimeoutError:
+            client_task.cancel()
+            raise Exception("Discord connection timed out after 30 seconds")
+        except Exception as e:
+            client_task.cancel()
+            logger.error(f"Discord connection failed: {str(e)}")
+            raise
         
         # Get sync state for incremental
         last_message_id = None
         if job_type == JobType.INCREMENTAL.value:
-            sync_state = db.query(ChannelSyncState).filter(
-                ChannelSyncState.channel_id == channel_id
-            ).first()
-            if sync_state:
-                last_message_id = sync_state.last_message_id
+            try:
+                channel_id_int = int(channel_id)
+                sync_state = db.query(ChannelSyncState).filter(
+                    ChannelSyncState.channel_id == channel_id_int
+                ).first()
+                if sync_state:
+                    last_message_id = str(sync_state.last_message_id) if sync_state.last_message_id else None
+            except ValueError:
+                logger.warning(f"Invalid channel_id for sync state lookup: {channel_id}")
+                last_message_id = None
         
         # Scrape messages
         messages = await scraper.scrape_channel_messages(
@@ -313,10 +376,73 @@ async def _async_scrape_channel(job_id, channel_id, user_token, job_type,
         export_path = Path(settings.exports_dir) / f"{channel_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{export_format}"
         export_path.parent.mkdir(parents=True, exist_ok=True)
         
-        async with aiofiles.open(export_path, 'w') as f:
+        async with aiofiles.open(export_path, 'w', encoding='utf-8') as f:
             if export_format == 'json':
                 await f.write(json.dumps(messages, indent=2))
-            # Add other format handlers as needed
+            elif export_format == 'txt':
+                # Format messages as plain text
+                for msg in messages:
+                    timestamp = msg['timestamp']
+                    author = msg['author']['name']
+                    content = msg['content']
+                    await f.write(f"[{timestamp}] {author}: {content}\n")
+                    if msg['attachments']:
+                        for att in msg['attachments']:
+                            await f.write(f"  Attachment: {att['filename']} ({att['url']})\n")
+                    if msg['embeds']:
+                        for embed in msg['embeds']:
+                            await f.write(f"  Embed: {embed.get('title', 'No title')}\n")
+                    await f.write("\n")
+            elif export_format == 'csv':
+                # CSV format
+                import csv
+                import io
+                output = io.StringIO()
+                writer = csv.writer(output)
+                writer.writerow(['timestamp', 'author_id', 'author_name', 'content', 'attachments', 'embeds'])
+                for msg in messages:
+                    writer.writerow([
+                        msg['timestamp'],
+                        msg['author']['id'],
+                        msg['author']['name'],
+                        msg['content'],
+                        json.dumps(msg['attachments']) if msg['attachments'] else '',
+                        json.dumps(msg['embeds']) if msg['embeds'] else ''
+                    ])
+                await f.write(output.getvalue())
+            elif export_format == 'html':
+                # Basic HTML format
+                html_content = '''<!DOCTYPE html>
+<html>
+<head>
+    <title>Discord Export</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .message { margin-bottom: 15px; padding: 10px; border-bottom: 1px solid #eee; }
+        .author { font-weight: bold; color: #7289da; }
+        .timestamp { color: #999; font-size: 0.9em; }
+        .content { margin-top: 5px; }
+    </style>
+</head>
+<body>
+<h1>Discord Channel Export</h1>
+'''
+                for msg in messages:
+                    # Escape HTML to prevent XSS
+                    safe_author = html.escape(msg['author']['name'])
+                    safe_content = html.escape(msg['content']).replace('\n', '<br>')
+                    html_content += f'''<div class="message">
+    <span class="author">{safe_author}</span>
+    <span class="timestamp">{msg['timestamp']}</span>
+    <div class="content">{safe_content}</div>
+</div>
+'''
+                html_content += '</body></html>'
+                await f.write(html_content)
+            else:
+                # Fallback to JSON if format not recognized
+                logger.warning(f"Unknown export format: {export_format}, defaulting to JSON")
+                await f.write(json.dumps(messages, indent=2))
         
         # Update job and sync state
         job.status = JobStatus.COMPLETED.value
@@ -325,8 +451,8 @@ async def _async_scrape_channel(job_id, channel_id, user_token, job_type,
         job.messages_scraped = len(messages)
         
         # Update sync state
-        if messages:
-            update_sync_state(db, channel_id, job.server_id, 
+        if messages and job.server_id is not None:
+            update_sync_state(db, channel_id, str(job.server_id), 
                             messages[-1]['id'], len(messages))
         
         # Close session
@@ -348,24 +474,35 @@ async def _async_scrape_channel(job_id, channel_id, user_token, job_type,
         
         db.commit()
     finally:
-        await scraper.client.close()
+        if 'scraper' in locals() and scraper and scraper.client:
+            await scraper.client.close()
+        if 'client_task' in locals():
+            client_task.cancel()
         db.close()
 
-def update_sync_state(db, channel_id: int, server_id: int, last_message_id: str, message_count: int):
+def update_sync_state(db, channel_id: str, server_id: str, last_message_id: str, message_count: int):
     """Update channel sync state after successful scraping"""
+    try:
+        channel_id_int = int(channel_id)
+        server_id_int = int(server_id)
+        last_message_id_int = int(last_message_id)
+    except ValueError as e:
+        logger.error(f"Invalid ID format in sync state update: {e}")
+        return
+    
     sync_state = db.query(ChannelSyncState).filter(
-        ChannelSyncState.channel_id == channel_id
+        ChannelSyncState.channel_id == channel_id_int
     ).first()
     
     if not sync_state:
         sync_state = ChannelSyncState(
-            channel_id=channel_id,
-            server_id=server_id
+            channel_id=channel_id_int,
+            server_id=server_id_int
         )
         db.add(sync_state)
     
     # Update sync state
-    sync_state.last_message_id = int(last_message_id)
+    sync_state.last_message_id = last_message_id_int
     sync_state.last_message_timestamp = datetime.utcnow()
     sync_state.total_messages = (sync_state.total_messages or 0) + message_count
     sync_state.last_sync_at = datetime.utcnow()

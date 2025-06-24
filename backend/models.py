@@ -34,8 +34,8 @@ class ExportFormat(str, Enum):
 # Request models
 class CreateScrapingJobRequest(BaseModel):
     """Request to create a new scraping job"""
-    server_id: int = Field(..., description="Discord server ID")
-    channel_id: int = Field(..., description="Discord channel ID")
+    server_id: str = Field(..., description="Discord server ID as string")
+    channel_id: str = Field(..., description="Discord channel ID as string")
     channel_name: Optional[str] = Field(None, description="Channel name for display")
     job_type: JobType = Field(JobType.INCREMENTAL, description="Type of scraping job")
     export_format: ExportFormat = Field(ExportFormat.JSON, description="Export format")
@@ -47,15 +47,15 @@ class CreateScrapingJobRequest(BaseModel):
 
 class CheckUpdatesRequest(BaseModel):
     """Request to check channels for updates"""
-    channel_ids: List[int] = Field(..., description="List of channel IDs to check")
+    channel_ids: List[str] = Field(..., description="List of channel IDs to check as strings")
 
 
 # Response models
 class ScrapingJobResponse(BaseModel):
     """Response for a scraping job"""
     job_id: str
-    server_id: int
-    channel_id: int
+    server_id: str  # Changed to string
+    channel_id: str  # Changed to string
     channel_name: Optional[str]
     job_type: JobType
     status: JobStatus
@@ -73,10 +73,10 @@ class ScrapingJobResponse(BaseModel):
 
 class ChannelSyncStateResponse(BaseModel):
     """Response for channel sync state"""
-    channel_id: int
-    server_id: int
+    channel_id: str  # Changed to string
+    server_id: str   # Changed to string
     channel_name: Optional[str]
-    last_message_id: Optional[int]
+    last_message_id: Optional[str]  # Changed to string
     last_message_timestamp: Optional[datetime]
     total_messages: int
     last_sync_at: Optional[datetime]
@@ -88,7 +88,7 @@ class ChannelSyncStateResponse(BaseModel):
 
 class ServerResponse(BaseModel):
     """Discord server information"""
-    server_id: int
+    server_id: str  # Changed to string
     name: str
     icon_url: Optional[str]
     member_count: Optional[int]
@@ -97,11 +97,11 @@ class ServerResponse(BaseModel):
 
 class ChannelResponse(BaseModel):
     """Discord channel information"""
-    channel_id: int
-    server_id: int
+    channel_id: str  # Changed to string
+    server_id: str   # Changed to string
     name: str
     type: str
-    category_id: Optional[int]
+    category_id: Optional[str]  # Changed to string
     position: int
     topic: Optional[str]
     is_nsfw: bool = False

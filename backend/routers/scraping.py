@@ -2,6 +2,7 @@
 Scraping job management routes
 """
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
@@ -11,6 +12,7 @@ from rq import Queue
 from redis import Redis
 import logging
 import os
+from pathlib import Path
 
 from config import settings
 from database import get_db, ScrapingJob, ChannelSyncState
@@ -52,11 +54,11 @@ async def create_scraping_job(
             detail="Discord user token is required. Please set up your token first."
         )
     
-    # Create job record
+    # Create job record - note: database might still expect integers
     job = ScrapingJob(
         job_id=job_id,
-        server_id=request.server_id,
-        channel_id=request.channel_id,
+        server_id=int(request.server_id),  # Convert to int for database
+        channel_id=int(request.channel_id),  # Convert to int for database
         channel_name=request.channel_name,
         job_type=request.job_type.value,
         status=JobStatus.PENDING.value,
@@ -73,7 +75,7 @@ async def create_scraping_job(
         enqueue_scraping_job(
             queue=queue,
             job_id=job_id,
-            channel_id=request.channel_id,
+            channel_id=request.channel_id,  # Keep as string
             bot_token=user_token,  # Actually user_token for self-bot
             job_type=request.job_type.value,
             export_format=request.export_format.value,
@@ -91,7 +93,24 @@ async def create_scraping_job(
             detail="Failed to start scraping job"
         )
     
-    return ScrapingJobResponse.from_orm(job)
+    # Convert to response with string IDs
+    # Create dict with string IDs
+    job_dict = {
+        'job_id': job.job_id,
+        'server_id': str(job.server_id),
+        'channel_id': str(job.channel_id),
+        'channel_name': job.channel_name,
+        'job_type': job.job_type,
+        'status': job.status,
+        'started_at': job.started_at,
+        'completed_at': job.completed_at,
+        'messages_scraped': job.messages_scraped,
+        'export_path': job.export_path,
+        'export_format': job.export_format,
+        'error_message': job.error_message,
+        'progress_percent': None
+    }
+    return ScrapingJobResponse(**job_dict)
 
 
 @router.get("/jobs", response_model=List[ScrapingJobResponse])
@@ -113,7 +132,23 @@ async def list_scraping_jobs(
     # Calculate progress for running jobs
     responses = []
     for job in jobs:
-        response = ScrapingJobResponse.from_orm(job)
+        # Create dict with string IDs
+        job_dict = {
+            'job_id': job.job_id,
+            'server_id': str(job.server_id),
+            'channel_id': str(job.channel_id),
+            'channel_name': job.channel_name,
+            'job_type': job.job_type,
+            'status': job.status,
+            'started_at': job.started_at,
+            'completed_at': job.completed_at,
+            'messages_scraped': job.messages_scraped,
+            'export_path': job.export_path,
+            'export_format': job.export_format,
+            'error_message': job.error_message,
+            'progress_percent': None
+        }
+        response = ScrapingJobResponse(**job_dict)
         
         # Add progress calculation for running jobs
         if job.status == JobStatus.RUNNING.value:
@@ -144,7 +179,23 @@ async def get_scraping_job(
             detail="Job not found"
         )
     
-    return ScrapingJobResponse.from_orm(job)
+    # Create dict with string IDs
+    job_dict = {
+        'job_id': job.job_id,
+        'server_id': str(job.server_id),
+        'channel_id': str(job.channel_id),
+        'channel_name': job.channel_name,
+        'job_type': job.job_type,
+        'status': job.status,
+        'started_at': job.started_at,
+        'completed_at': job.completed_at,
+        'messages_scraped': job.messages_scraped,
+        'export_path': job.export_path,
+        'export_format': job.export_format,
+        'error_message': job.error_message,
+        'progress_percent': None
+    }
+    return ScrapingJobResponse(**job_dict)
 
 
 @router.put("/jobs/{job_id}/cancel")
@@ -185,14 +236,20 @@ async def check_channel_updates(
     db: Session = Depends(get_db)
 ):
     """Check if channels have new messages since last sync"""
-    # Get sync states for requested channels
+    # Get sync states for requested channels (convert string IDs to int for DB query)
     sync_states = db.query(ChannelSyncState).filter(
-        ChannelSyncState.channel_id.in_(request.channel_ids)
+        ChannelSyncState.channel_id.in_([int(cid) for cid in request.channel_ids])
     ).all()
     
     responses = []
     for state in sync_states:
         response = ChannelSyncStateResponse.from_orm(state)
+        # Convert IDs to strings
+        response.channel_id = str(state.channel_id)
+        response.server_id = str(state.server_id)
+        if state.last_message_id:
+            response.last_message_id = str(state.last_message_id)
+        
         # In real implementation, we'd check Discord API for new messages
         # For now, just mark channels older than 1 day as needing update
         if state.last_sync_at:
@@ -209,7 +266,7 @@ async def check_channel_updates(
         if channel_id not in synced_ids:
             responses.append(ChannelSyncStateResponse(
                 channel_id=channel_id,
-                server_id=0,  # Would need to look this up
+                server_id="0",  # String ID
                 channel_name=None,
                 last_message_id=None,
                 last_message_timestamp=None,
@@ -223,16 +280,36 @@ async def check_channel_updates(
 
 @router.get("/history/{channel_id}", response_model=List[ScrapingJobResponse])
 async def get_channel_scraping_history(
-    channel_id: int,
+    channel_id: str,  # Changed to string
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get scraping history for a specific channel"""
     jobs = db.query(ScrapingJob).filter(
-        ScrapingJob.channel_id == channel_id
+        ScrapingJob.channel_id == int(channel_id)  # Convert to int for DB query
     ).order_by(ScrapingJob.started_at.desc()).limit(20).all()
     
-    return [ScrapingJobResponse.from_orm(job) for job in jobs]
+    # Convert IDs to strings in responses
+    responses = []
+    for job in jobs:
+        job_dict = {
+            'job_id': job.job_id,
+            'server_id': str(job.server_id),
+            'channel_id': str(job.channel_id),
+            'channel_name': job.channel_name,
+            'job_type': job.job_type,
+            'status': job.status,
+            'started_at': job.started_at,
+            'completed_at': job.completed_at,
+            'messages_scraped': job.messages_scraped,
+            'export_path': job.export_path,
+            'export_format': job.export_format,
+            'error_message': job.error_message,
+            'progress_percent': None
+        }
+        responses.append(ScrapingJobResponse(**job_dict))
+    
+    return responses
 
 
 @router.get("/stats", response_model=StatsResponse)
@@ -268,4 +345,58 @@ async def get_dashboard_stats(
         total_jobs=total_jobs,
         active_jobs=active_jobs,
         last_sync=last_job.completed_at if last_job else None
+    )
+
+
+@router.get("/exports/{job_id}/download")
+async def download_export(
+    job_id: str,
+    db: Session = Depends(get_db)
+):
+    """Download the export file for a completed job"""
+    # Get job from database
+    job = db.query(ScrapingJob).filter(ScrapingJob.job_id == job_id).first()
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found"
+        )
+    
+    # Check if job is completed and has export path
+    if job.status != JobStatus.COMPLETED.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Job is not completed yet"
+        )
+    
+    if not job.export_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Export file not found"
+        )
+    
+    # Check if file exists
+    export_file = Path(job.export_path)
+    if not export_file.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Export file no longer exists"
+        )
+    
+    # Get filename for download
+    filename = f"discord_export_{job.channel_name}_{job.job_id[:8]}.{job.export_format}"
+    
+    # Set appropriate content type based on format
+    content_types = {
+        'json': 'application/json',
+        'html': 'text/html',
+        'csv': 'text/csv',
+        'txt': 'text/plain'
+    }
+    media_type = content_types.get(job.export_format, 'application/octet-stream')
+    
+    return FileResponse(
+        path=str(export_file),
+        filename=filename,
+        media_type=media_type
     )

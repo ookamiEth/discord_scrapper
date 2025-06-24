@@ -51,6 +51,20 @@ export default function Jobs() {
     }
   }
 
+  const handleDownload = (jobId: string, channelName?: string, format?: string) => {
+    // Create filename
+    const filename = `discord_export_${channelName || 'channel'}_${jobId.slice(0, 8)}.${format || 'txt'}`
+    
+    // For local mode without auth, just use direct download
+    const link = document.createElement('a')
+    link.href = `http://localhost:8000/api/v1/scraping/exports/${jobId}/download`
+    link.download = filename
+    link.target = '_blank'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'completed':
@@ -160,7 +174,7 @@ export default function Jobs() {
                   {job.status === 'completed' && job.export_path && (
                     <IconButton
                       size="small"
-                      href={`/api/v1/exports/${job.job_id}/download`}
+                      onClick={() => handleDownload(job.job_id, job.channel_name, job.export_format)}
                       title="Download export"
                     >
                       <DownloadIcon />

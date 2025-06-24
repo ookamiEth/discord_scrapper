@@ -1,5 +1,5 @@
 export interface Server {
-  server_id: number
+  server_id: string  // Changed to string
   name: string
   icon_url?: string
   member_count?: number
@@ -7,11 +7,11 @@ export interface Server {
 }
 
 export interface Channel {
-  channel_id: number
-  server_id: number
+  channel_id: string  // Changed to string
+  server_id: string   // Changed to string
   name: string
   type: string
-  category_id?: number
+  category_id?: string  // Changed to string
   position: number
   topic?: string
   is_nsfw: boolean
@@ -19,10 +19,10 @@ export interface Channel {
 }
 
 export interface ChannelSyncState {
-  channel_id: number
-  server_id: number
+  channel_id: string  // Changed to string
+  server_id: string   // Changed to string
   channel_name?: string
-  last_message_id?: number
+  last_message_id?: string  // Changed to string
   last_message_timestamp?: string
   total_messages: number
   last_sync_at?: string
@@ -31,8 +31,8 @@ export interface ChannelSyncState {
 
 export interface ScrapingJob {
   job_id: string
-  server_id: number
-  channel_id: number
+  server_id: string   // Changed to string
+  channel_id: string  // Changed to string
   channel_name?: string
   job_type: 'full' | 'incremental' | 'date_range'
   status: 'pending' | 'running' | 'completed' | 'failed' | 'paused'
@@ -46,8 +46,8 @@ export interface ScrapingJob {
 }
 
 export interface CreateJobRequest {
-  server_id: number
-  channel_id: number
+  server_id: string   // Changed to string
+  channel_id: string  // Changed to string
   channel_name?: string
   job_type: 'full' | 'incremental' | 'date_range'
   export_format: 'json' | 'html' | 'csv' | 'txt'

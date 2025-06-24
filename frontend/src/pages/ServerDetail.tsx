@@ -47,10 +47,10 @@ export default function ServerDetail() {
   )
   const loading = useSelector((state: RootState) => state.servers.loading)
   const server = useSelector((state: RootState) => 
-    state.servers.servers.find(s => s.server_id.toString() === serverId)
+    state.servers.servers.find(s => s.server_id === serverId)
   )
   
-  const [selectedChannels, setSelectedChannels] = useState<Set<number>>(new Set())
+  const [selectedChannels, setSelectedChannels] = useState<Set<string>>(new Set())
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [exportFormat, setExportFormat] = useState<'json' | 'html' | 'csv' | 'txt'>('json')
   const [jobType, setJobType] = useState<'full' | 'incremental'>('incremental')
@@ -76,7 +76,7 @@ export default function ServerDetail() {
     }
   }
 
-  const handleChannelToggle = (channelId: number) => {
+  const handleChannelToggle = (channelId: string) => {
     const newSelected = new Set(selectedChannels)
     if (newSelected.has(channelId)) {
       newSelected.delete(channelId)
@@ -111,8 +111,8 @@ export default function ServerDetail() {
       }
       
       await dispatch(createJob({
-        server_id: parseInt(serverId!),
-        channel_id: channelId,
+        server_id: serverId!,  // Keep as string
+        channel_id: channelId,  // Already a string now
         channel_name: channel?.name,
         job_type: jobType,
         export_format: exportFormat,
