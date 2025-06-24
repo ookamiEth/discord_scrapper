@@ -374,28 +374,54 @@ async def download_export(
             detail="Export file not found"
         )
     
-    # Check if file exists
-    export_file = Path(job.export_path)
-    if not export_file.exists():
+    # Check if export exists
+    export_path = Path(job.export_path)
+    if not export_path.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Export file no longer exists"
+            detail="Export no longer exists"
         )
     
-    # Get filename for download
-    filename = f"discord_export_{job.channel_name}_{job.job_id[:8]}.{job.export_format}"
-    
-    # Set appropriate content type based on format
-    content_types = {
-        'json': 'application/json',
-        'html': 'text/html',
-        'csv': 'text/csv',
-        'txt': 'text/plain'
-    }
-    media_type = content_types.get(job.export_format, 'application/octet-stream')
-    
-    return FileResponse(
-        path=str(export_file),
-        filename=filename,
-        media_type=media_type
-    )
+    # If it's a directory (split export), create a zip file
+    if export_path.is_dir():
+        import zipfile
+        import tempfile
+        from fastapi.background import BackgroundTask
+        
+        # Create temporary zip file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp:
+            zip_path = tmp.name
+            
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # Add all files in the directory
+            for file_path in export_path.rglob('*'):
+                if file_path.is_file():
+                    arcname = file_path.relative_to(export_path)
+                    zipf.write(file_path, arcname)
+        
+        # Return zip file
+        filename = f"discord_export_{job.channel_name}_{job.job_id[:8]}.zip"
+        return FileResponse(
+            path=zip_path,
+            filename=filename,
+            media_type='application/zip',
+            background=BackgroundTask(lambda: os.unlink(zip_path))  # Clean up temp file
+        )
+    else:
+        # Single file export
+        filename = f"discord_export_{job.channel_name}_{job.job_id[:8]}.{job.export_format}"
+        
+        # Set appropriate content type based on format
+        content_types = {
+            'json': 'application/json',
+            'html': 'text/html',
+            'csv': 'text/csv',
+            'txt': 'text/plain'
+        }
+        media_type = content_types.get(job.export_format, 'application/octet-stream')
+        
+        return FileResponse(
+            path=str(export_path),
+            filename=filename,
+            media_type=media_type
+        )

@@ -9,6 +9,7 @@ import random
 import logging
 import uuid
 import os
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 import aiofiles
@@ -53,9 +54,9 @@ def get_human_delay():
         ANTI_DETECTION_CONFIG['min_delay'],
         ANTI_DETECTION_CONFIG['max_delay']
     )
-    # Add gaussian noise
-    jitter = random.gauss(0, 1)
-    return max(1, base + jitter)
+    # Add gaussian noise with smaller variance
+    jitter = random.gauss(0, 0.1)
+    return max(0.01, base + jitter)  # 10ms minimum instead of 1 second
 
 
 class CircuitBreaker:
@@ -189,6 +190,8 @@ class SelfBotScraper:
         
         # Scrape with anti-detection measures
         message_count = 0
+        last_batch_time = time.time()
+        
         async for message in channel.history(**kwargs):
             # Rate limiting check
             await self._check_rate_limits()
@@ -198,12 +201,29 @@ class SelfBotScraper:
             if message_count % 10 == 0:
                 logger.info(f"Job {self.job_id}: Scraped {message_count} messages from channel {channel_id}")
             
-            # Random delay between messages with human-like jitter
-            await asyncio.sleep(get_human_delay())
-            
-            # Simulate human reading behavior
-            if random.random() < 0.1:  # 10% chance of longer pause
-                await asyncio.sleep(random.uniform(5, 15))
+            # Batch-based delays: only delay after processing ~100 messages (API batch size)
+            if message_count % 100 == 0:
+                # Calculate time since last batch delay
+                time_since_batch = time.time() - last_batch_time
+                
+                # Ensure at least 2-4 seconds between batches for anti-detection
+                min_batch_delay = random.uniform(2, 4)
+                if time_since_batch < min_batch_delay:
+                    delay_needed = min_batch_delay - time_since_batch
+                    logger.info(f"Batch delay: waiting {delay_needed:.1f}s between API batches")
+                    await asyncio.sleep(delay_needed)
+                
+                # 10% chance of longer pause between batches
+                if random.random() < 0.1:
+                    extra_delay = random.uniform(2, 5)
+                    logger.info(f"Taking extra pause of {extra_delay:.1f}s")
+                    await asyncio.sleep(extra_delay)
+                
+                last_batch_time = time.time()
+            else:
+                # Minimal delay for message processing (optional, for CPU breathing room)
+                if message_count % 10 == 0:
+                    await asyncio.sleep(0.01)  # 10ms every 10 messages
             
             # Extract message data
             msg_data = {
@@ -234,26 +254,10 @@ class SelfBotScraper:
             
             messages_data.append(msg_data)
             self.messages_scraped += 1
-            self.burst_message_count += 1
             
             # Update job progress more frequently for accurate tracking
             if self.messages_scraped % 10 == 0:  # Every 10 messages
                 await self._update_job_progress(message_limit)
-            
-            # Check for burst delays
-            if self.burst_message_count >= random.randint(10, 20):
-                burst_delay = random.uniform(*ANTI_DETECTION_CONFIG['burst_delay'])
-                logger.info(f"Taking burst delay for {burst_delay:.0f} seconds...")
-                await asyncio.sleep(burst_delay)
-                self.burst_message_count = 0
-            
-            # Take random breaks
-            if (ANTI_DETECTION_CONFIG['random_breaks'] and 
-                self.messages_scraped % random.randint(200, 400) == 0):
-                break_duration = random.uniform(*ANTI_DETECTION_CONFIG['break_duration'])
-                logger.info(f"Taking break for {break_duration:.0f} seconds...")
-                self.breaks_taken += 1
-                await asyncio.sleep(break_duration)
         
         return messages_data
     
@@ -383,27 +387,92 @@ async def _async_scrape_channel(job_id, channel_id, user_token, job_type,
             date_range_start, date_range_end, last_message_id, message_limit
         )
         
-        # Save export
-        export_path = Path(settings.exports_dir) / f"{channel_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{export_format}"
-        export_path.parent.mkdir(parents=True, exist_ok=True)
+        # Check if we should split the export
+        split_enabled = os.environ.get('EXPORT_SPLIT_ENABLED', 'true').lower() == 'true'
+        max_messages_per_file = int(os.environ.get('MAX_MESSAGES_PER_FILE', '500'))
         
-        async with aiofiles.open(export_path, 'w', encoding='utf-8') as f:
-            if export_format == 'json':
-                await f.write(json.dumps(messages, indent=2))
-            elif export_format == 'txt':
-                # Format messages as plain text
-                for msg in messages:
-                    timestamp = msg['timestamp']
-                    author = msg['author']['name']
-                    content = msg['content']
-                    await f.write(f"[{timestamp}] {author}: {content}\n")
-                    if msg['attachments']:
-                        for att in msg['attachments']:
-                            await f.write(f"  Attachment: {att['filename']} ({att['url']})\n")
-                    if msg['embeds']:
-                        for embed in msg['embeds']:
-                            await f.write(f"  Embed: {embed.get('title', 'No title')}\n")
-                    await f.write("\n")
+        # Create export directory
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        if split_enabled and len(messages) > max_messages_per_file:
+            # Create directory for split files
+            export_dir = Path(settings.exports_dir) / f"{channel_id}_{timestamp}"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            export_paths = []
+        else:
+            # Single file export
+            export_path = Path(settings.exports_dir) / f"{channel_id}_{timestamp}.{export_format}"
+            export_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Handle split exports
+        if split_enabled and len(messages) > max_messages_per_file:
+            # Split messages into chunks
+            for i in range(0, len(messages), max_messages_per_file):
+                chunk = messages[i:i + max_messages_per_file]
+                part_num = (i // max_messages_per_file) + 1
+                part_path = export_dir / f"part_{part_num:03d}.{export_format}"
+                export_paths.append(part_path)
+                
+                logger.info(f"Writing part {part_num} with {len(chunk)} messages to {part_path}")
+                
+                async with aiofiles.open(part_path, 'w', encoding='utf-8') as f:
+                    if export_format == 'json':
+                        await f.write(json.dumps(chunk, indent=2))
+                    elif export_format == 'txt':
+                        # Add header to each part
+                        await f.write(f"=== Part {part_num} of {(len(messages) + max_messages_per_file - 1) // max_messages_per_file} ===\n")
+                        await f.write(f"Messages {i+1} to {min(i + max_messages_per_file, len(messages))}\n")
+                        await f.write(f"{'='*50}\n\n")
+                        
+                        # Format messages as plain text
+                        for msg in chunk:
+                            timestamp = msg['timestamp']
+                            author = msg['author']['name']
+                            content = msg['content']
+                            await f.write(f"[{timestamp}] {author}: {content}\n")
+                            if msg['attachments']:
+                                for att in msg['attachments']:
+                                    await f.write(f"  Attachment: {att['filename']} ({att['url']})\n")
+                            if msg['embeds']:
+                                for embed in msg['embeds']:
+                                    await f.write(f"  Embed: {embed.get('title', 'No title')}\n")
+                            await f.write("\n")
+            
+            # Create index file with metadata
+            index_path = export_dir / "index.json"
+            async with aiofiles.open(index_path, 'w', encoding='utf-8') as f:
+                index_data = {
+                    'channel_id': channel_id,
+                    'total_messages': len(messages),
+                    'parts': len(export_paths),
+                    'messages_per_part': max_messages_per_file,
+                    'export_format': export_format,
+                    'created_at': datetime.utcnow().isoformat(),
+                    'files': [p.name for p in export_paths]
+                }
+                await f.write(json.dumps(index_data, indent=2))
+            
+            # Set export_path to the directory for database storage
+            export_path = str(export_dir)
+            logger.info(f"Export split into {len(export_paths)} parts in {export_dir}")
+        else:
+            # Single file export (original logic)
+            async with aiofiles.open(export_path, 'w', encoding='utf-8') as f:
+                if export_format == 'json':
+                    await f.write(json.dumps(messages, indent=2))
+                elif export_format == 'txt':
+                    # Format messages as plain text
+                    for msg in messages:
+                        timestamp = msg['timestamp']
+                        author = msg['author']['name']
+                        content = msg['content']
+                        await f.write(f"[{timestamp}] {author}: {content}\n")
+                        if msg['attachments']:
+                            for att in msg['attachments']:
+                                await f.write(f"  Attachment: {att['filename']} ({att['url']})\n")
+                        if msg['embeds']:
+                            for embed in msg['embeds']:
+                                await f.write(f"  Embed: {embed.get('title', 'No title')}\n")
+                        await f.write("\n")
             elif export_format == 'csv':
                 # CSV format
                 import csv
