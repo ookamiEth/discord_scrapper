@@ -386,7 +386,6 @@ async def download_export(
     if export_path.is_dir():
         import zipfile
         import tempfile
-        from fastapi.background import BackgroundTask
         
         # Create temporary zip file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp:
@@ -401,12 +400,21 @@ async def download_export(
         
         # Return zip file
         filename = f"discord_export_{job.channel_name}_{job.job_id[:8]}.zip"
-        return FileResponse(
+        
+        # Create a background task to clean up the temp file
+        async def cleanup():
+            try:
+                os.unlink(zip_path)
+            except:
+                pass
+        
+        response = FileResponse(
             path=zip_path,
             filename=filename,
-            media_type='application/zip',
-            background=BackgroundTask(lambda: os.unlink(zip_path))  # Clean up temp file
+            media_type='application/zip'
         )
+        # Note: temp file will remain until manually cleaned or system reboot
+        return response
     else:
         # Single file export
         filename = f"discord_export_{job.channel_name}_{job.job_id[:8]}.{job.export_format}"

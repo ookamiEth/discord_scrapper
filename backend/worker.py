@@ -10,6 +10,8 @@ import logging
 import uuid
 import os
 import time
+import csv
+import io
 from datetime import datetime, timedelta
 from pathlib import Path
 import aiofiles
@@ -436,6 +438,52 @@ async def _async_scrape_channel(job_id, channel_id, user_token, job_type,
                                 for embed in msg['embeds']:
                                     await f.write(f"  Embed: {embed.get('title', 'No title')}\n")
                             await f.write("\n")
+                    elif export_format == 'csv':
+                        # CSV format for chunks
+                        output = io.StringIO()
+                        writer = csv.writer(output)
+                        if part_num == 1:  # Add header only to first part
+                            writer.writerow(['timestamp', 'author_id', 'author_name', 'content', 'attachments', 'embeds'])
+                        for msg in chunk:
+                            writer.writerow([
+                                msg['timestamp'],
+                                msg['author']['id'],
+                                msg['author']['name'],
+                                msg['content'],
+                                json.dumps(msg['attachments']) if msg['attachments'] else '',
+                                json.dumps(msg['embeds']) if msg['embeds'] else ''
+                            ])
+                        await f.write(output.getvalue())
+                    elif export_format == 'html':
+                        # HTML format for chunks
+                        html_content = f'''<!DOCTYPE html>
+<html>
+<head>
+    <title>Discord Export - Part {part_num}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+        .message {{ margin-bottom: 15px; padding: 10px; border-bottom: 1px solid #eee; }}
+        .author {{ font-weight: bold; color: #7289da; }}
+        .timestamp {{ color: #999; font-size: 0.9em; }}
+        .content {{ margin-top: 5px; }}
+        .part-info {{ background: #f0f0f0; padding: 10px; margin-bottom: 20px; }}
+    </style>
+</head>
+<body>
+<h1>Discord Channel Export - Part {part_num}</h1>
+<div class="part-info">Messages {i+1} to {min(i + max_messages_per_file, len(messages))}</div>
+'''
+                        for msg in chunk:
+                            safe_author = html.escape(msg['author']['name'])
+                            safe_content = html.escape(msg['content']).replace('\n', '<br>')
+                            html_content += f'''<div class="message">
+    <span class="author">{safe_author}</span>
+    <span class="timestamp">{msg['timestamp']}</span>
+    <div class="content">{safe_content}</div>
+</div>
+'''
+                        html_content += '</body></html>'
+                        await f.write(html_content)
             
             # Create index file with metadata
             index_path = export_dir / "index.json"
@@ -473,26 +521,24 @@ async def _async_scrape_channel(job_id, channel_id, user_token, job_type,
                             for embed in msg['embeds']:
                                 await f.write(f"  Embed: {embed.get('title', 'No title')}\n")
                         await f.write("\n")
-            elif export_format == 'csv':
-                # CSV format
-                import csv
-                import io
-                output = io.StringIO()
-                writer = csv.writer(output)
-                writer.writerow(['timestamp', 'author_id', 'author_name', 'content', 'attachments', 'embeds'])
-                for msg in messages:
-                    writer.writerow([
-                        msg['timestamp'],
-                        msg['author']['id'],
-                        msg['author']['name'],
-                        msg['content'],
-                        json.dumps(msg['attachments']) if msg['attachments'] else '',
-                        json.dumps(msg['embeds']) if msg['embeds'] else ''
-                    ])
-                await f.write(output.getvalue())
-            elif export_format == 'html':
-                # Basic HTML format
-                html_content = '''<!DOCTYPE html>
+                elif export_format == 'csv':
+                    # CSV format
+                    output = io.StringIO()
+                    writer = csv.writer(output)
+                    writer.writerow(['timestamp', 'author_id', 'author_name', 'content', 'attachments', 'embeds'])
+                    for msg in messages:
+                        writer.writerow([
+                            msg['timestamp'],
+                            msg['author']['id'],
+                            msg['author']['name'],
+                            msg['content'],
+                            json.dumps(msg['attachments']) if msg['attachments'] else '',
+                            json.dumps(msg['embeds']) if msg['embeds'] else ''
+                        ])
+                    await f.write(output.getvalue())
+                elif export_format == 'html':
+                    # Basic HTML format
+                    html_content = '''<!DOCTYPE html>
 <html>
 <head>
     <title>Discord Export</title>
@@ -507,22 +553,22 @@ async def _async_scrape_channel(job_id, channel_id, user_token, job_type,
 <body>
 <h1>Discord Channel Export</h1>
 '''
-                for msg in messages:
-                    # Escape HTML to prevent XSS
-                    safe_author = html.escape(msg['author']['name'])
-                    safe_content = html.escape(msg['content']).replace('\n', '<br>')
-                    html_content += f'''<div class="message">
+                    for msg in messages:
+                        # Escape HTML to prevent XSS
+                        safe_author = html.escape(msg['author']['name'])
+                        safe_content = html.escape(msg['content']).replace('\n', '<br>')
+                        html_content += f'''<div class="message">
     <span class="author">{safe_author}</span>
     <span class="timestamp">{msg['timestamp']}</span>
     <div class="content">{safe_content}</div>
 </div>
 '''
-                html_content += '</body></html>'
-                await f.write(html_content)
-            else:
-                # Fallback to JSON if format not recognized
-                logger.warning(f"Unknown export format: {export_format}, defaulting to JSON")
-                await f.write(json.dumps(messages, indent=2))
+                    html_content += '</body></html>'
+                    await f.write(html_content)
+                else:
+                    # Fallback to JSON if format not recognized
+                    logger.warning(f"Unknown export format: {export_format}, defaulting to JSON")
+                    await f.write(json.dumps(messages, indent=2))
         
         # Update job and sync state
         job.status = JobStatus.COMPLETED.value
